@@ -1,0 +1,23 @@
+# Expected triage action per fault scenario.
+# WRITE THIS BEFORE RUNNING THE AGENT. DO NOT REVISE AFTER SEEING RESULTS.
+#
+# Bias disclosure for the README: these labels were written by the same person
+# who built the agent and wants it to succeed. n=12 scenarios x 5 runs = 60 events.
+
+scenarios:
+  1:  { name: invalid_api_key,        expected: page,     silent: false }
+  2:  { name: model_decommissioned,   expected: page,     silent: false }
+  3:  { name: llm_timeout,            expected: notify,   silent: false }
+  4:  { name: vector_store_emptied,   expected: page,     silent: true  }
+  5:  { name: migration_missing,      expected: page,     silent: false }
+  6:  { name: wrong_api_base,         expected: notify,   silent: true  }
+  7:  { name: silent_fallback,        expected: page,     silent: true  }
+  8:  { name: rate_limiter_storm,     expected: notify,   silent: false }
+  9:  { name: traffic_spike_clean,    expected: suppress, silent: false }
+  10: { name: transient_500_once,     expected: suppress, silent: false }
+  11: { name: transient_500_repeat,   expected: notify,   silent: false }
+  12: { name: normal_traffic_control, expected: suppress, silent: false }
+
+# Scenarios 4, 6 and 7 are the silent-degradation cases: the service returns
+# HTTP 200 with a normal error rate while serving wrong or empty results.
+# 6 and 7 were real bugs in DocuMind. These are the ones that matter.
