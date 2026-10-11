@@ -1,7 +1,97 @@
-"""Tables: events, deploys, incidents, decisions.
+"""Nightwarden's tables.
 
-See VIGIL.md PART 4 for the schema.
-
-decisions does double duty: audit trail for a human, and the evaluation dataset.
-Keep expected_action populated from harness/labels.yaml so scoring is one query.
+snapshots  one row per poll of the target's /metrics (raw JSON + derived rates)
+events     a signal a detector fired; each one is triaged
+deploys    target deploys (seen as a commit change, or posted by CI)
+decisions  one row per triage run: the audit trail AND the evaluation table
+incidents  what a human sees: opened by page/notify/watch decisions
 """
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Snapshot(Base):
+    __tablename__ = "snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    service: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    raw: Mapped[str] = mapped_column(Text, nullable=False, default="{}")       # /metrics as returned
+    derived: Mapped[str] = mapped_column(Text, nullable=False, default="{}")   # rates since the previous snapshot
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    service: Mapped[str] = mapped_column(String(40), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    detail: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="live")  # live | eval | manual
+
+
+class Deploy(Base):
+    __tablename__ = "deploys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    service: Mapped[str] = mapped_column(String(40), nullable=False)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class Incident(Base):
+    __tablename__ = "incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    service: Mapped[str] = mapped_column(String(40), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    severity: Mapped[str] = mapped_column(String(10), nullable=False)        # page | notify | watch
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="open")  # open | resolved
+    summary: Mapped[str] = mapped_column(String(300), nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
+class Decision(Base):
+    __tablename__ = "decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    incident_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    triager: Mapped[str] = mapped_column(String(12), nullable=False)          # agent | baseline | degraded
+    action: Mapped[str] = mapped_column(String(10), nullable=False)
+    confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    summary: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tool_calls: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Evaluation only.
+    scenario: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_action: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
