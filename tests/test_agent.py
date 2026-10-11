@@ -113,3 +113,11 @@ def test_get_metrics_adds_the_window_median_for_context():
     vals = sorted(p["value"] for p in out["points"])
     assert out["window_min"] == vals[0] and out["window_max"] == vals[-1]
     assert out["latest"] == out["points"][-1]["value"] and out["latest_vs_median"] > 0
+
+
+def test_last_round_offers_only_decide(scripted):
+    event, evidence = build(1, 0)
+    client = scripted([[tool_call("get_recent_logs", {"minutes": 30})], [tool_call("decide", DECIDE, 1)]])
+    triage(event, evidence, client=client, max_rounds=2)
+    assert len(client.requests[0]["tools"]) == 5
+    assert [t["function"]["name"] for t in client.requests[-1]["tools"]] == ["decide"]

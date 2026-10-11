@@ -58,6 +58,9 @@ def _client():
     return Groq(api_key=settings.groq_api_key, timeout=45, max_retries=1)
 
 
+# On the last round only `decide` is offered: forcing tool_choice while listing every tool lets the
+# model still attempt another tool, which Groq rejects with a 400 (tool_use_failed).
+DECIDE_ONLY = [t for t in TOOLS if t["function"]["name"] == "decide"]
 RATE_LIMIT_RETRIES = 4
 MAX_RATE_LIMIT_WAIT_S = 65.0
 sleep = time.sleep  # patched in tests
@@ -108,7 +111,7 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
         for waited in range(RATE_LIMIT_RETRIES + 1):
             try:
                 resp = client.chat.completions.create(
-                    model=model, messages=messages, tools=TOOLS, temperature=0.2, max_tokens=1200,
+                    model=model, messages=messages, tools=DECIDE_ONLY if last else TOOLS, temperature=0.2, max_tokens=1200,
                     tool_choice={"type": "function", "function": {"name": "decide"}} if last else "auto",
                 )
                 break
