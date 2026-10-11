@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Tests (no network, no API key)
+        run: pytest -q
+      - name: Migrations apply cleanly
+        run: alembic upgrade head
+        env:
+          DATABASE_URL: sqlite:///./ci.db
+      - name: Baseline eval still reproduces
+        run: python -m eval.run_eval && python -m eval.report
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Space image
+        run: docker build -t nightwarden .
+      - name: Boot it and hit /health
+        run: |
+          docker run -d --name nw -p 7860:7860 -e POLLER_ENABLED=false nightwarden
+          for i in $(seq 1 20); do curl -fs localhost:7860/health && exit 0; sleep 2; done
+          docker logs nw; exit 1
