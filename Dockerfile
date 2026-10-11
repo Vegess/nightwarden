@@ -3,8 +3,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 LOG_JSON=true
 
-# Spaces run the container as uid 1000.
-RUN useradd -m -u 1000 app
+# Spaces run the container as uid 1000. The app dir must be owned by it so the
+# default SQLite file (./nightwarden.db) can be created at startup.
+RUN useradd -m -u 1000 app && install -d -o app -g app /home/app/nightwarden
 WORKDIR /home/app/nightwarden
 
 COPY requirements.txt .
