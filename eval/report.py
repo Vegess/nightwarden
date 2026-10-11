@@ -30,8 +30,11 @@ def metrics(rows: list[dict], key: str) -> dict:
 
 def summarize(data: dict) -> dict:
     rows = data["cases"]
-    out = {"baseline": metrics(rows, "baseline"), "agent": metrics(rows, "agent")}
     agent_rows = [r for r in rows if r.get("agent")]
+    # Compare on the same cases: if the agent ran on a subset, score the baseline on that subset too.
+    paired = agent_rows or rows
+    out = {"baseline": metrics(paired, "baseline"), "agent": metrics(rows, "agent"),
+           "baseline_all": metrics(rows, "baseline"), "reps": sorted({r["rep"] for r in paired})}
     if agent_rows:
         lat = sorted(r["latency_ms"] for r in agent_rows)
         out["agent_cost"] = {
@@ -42,8 +45,8 @@ def summarize(data: dict) -> dict:
             "errors": sum(1 for r in rows if r.get("error") and not r.get("agent")),
         }
     out["per_scenario"] = []
-    for sc in sorted({r["scenario"] for r in rows}):
-        rs = [r for r in rows if r["scenario"] == sc]
+    for sc in sorted({r["scenario"] for r in paired}):
+        rs = [r for r in paired if r["scenario"] == sc]
         out["per_scenario"].append({
             "scenario": sc, "name": rs[0]["name"], "expected": rs[0]["expected"], "silent": rs[0]["silent"],
             "baseline_correct": sum(r["baseline"] == r["expected"] for r in rs),
@@ -61,7 +64,8 @@ def main() -> None:
     data = json.loads(Path(OUT).read_text())
     s = summarize(data)
     b, a = s["baseline"], s.get("agent") or {}
-    print(f"Model: {data.get('model') or '(baseline only)'} · generated {data['generated_at']}\n")
+    print(f"Model: {data.get('model') or '(baseline only)'} · generated {data['generated_at']} · "
+          f"{s['baseline']['n']} cases (variations {', '.join(map(str, s['reps']))})\n")
     print("| Metric | Rules baseline | Agent |\n|---|---|---|")
     for key, label in [("accuracy", "Action accuracy"), ("page_precision", "Page precision"),
                        ("page_recall", "Page recall"), ("silent_recall", "Silent-degradation recall"),

@@ -50,17 +50,26 @@ Citebase /metrics, /metrics/logs
 expected actions (`harness/labels.yaml`) and the rules baseline (`app/agent/baseline.py`) were written and frozen
 **before** the agent existed, so neither could be tuned to make the agent look good.
 
+**Development run** (variation 0 of each scenario, 12 cases, `openai/gpt-oss-120b`, 11 Oct 2026). These cases
+have been looked at, so they're a development set, not the headline result:
+
 | Metric | Rules baseline | Agent |
 |---|---|---|
-| Action accuracy | 41.7% | *pending* |
-| Page precision | 100.0% | *pending* |
-| Page recall | 20.0% | *pending* |
-| Silent-degradation recall | 0.0% | *pending* |
-| Accuracy on loud failures | 55.6% | *pending* |
+| Action accuracy | 41.7% | 41.7% |
+| Page precision | 100.0% | 66.7% |
+| Page recall | 20.0% | 80.0% |
+| Silent-degradation recall | 0.0% | 33.3% |
+| Accuracy on loud failures | 55.6% | 44.4% |
+| Median tool calls / mean tokens | — | 3 / 5,919 |
 
-The agent column is filled by the **Agent eval** GitHub Action (needs the `GROQ_API_KEY` secret) and published
-on the dashboard's Evaluation tab exactly as measured. Three scenarios (4, 6, 7) are silent: HTTP 200, normal
-error rate, wrong output. The baseline misses all of them, which is the point of the project.
+What it showed: the agent catches the real outages the rules miss (4 of 5 page-worthy cases, including the emptied
+vector store) but over-escalates: it paged for an LLM timeout and for a traffic drop that warranted a notify, and it
+called normal latency "high" on quiet controls because it had nothing to compare against. One change was made after
+this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
+the model judges a value against the service's own normal. Labels and the baseline were not touched.
+
+**Held-out result** (variations 1–4, 48 cases never inspected): *pending*. Run with
+`python -m eval.run_eval --agent --from-rep 1`.
 
 Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
 approximate Citebase's real logs but aren't real incidents.
