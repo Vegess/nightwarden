@@ -23,7 +23,9 @@ TOOLS = [
         "name": "get_metrics",
         "description": "A metric over time, oldest first, one point per poll. error_rate counts 5xx only; "
                        "rate_4xx includes 429; fallback_rate is the share of answers produced by the degraded "
-                       "fallback instead of the language model; traffic_ratio compares traffic with a typical day.",
+                       "fallback instead of the language model; traffic_ratio compares traffic with a typical day. "
+                       "Also returns the window's median, so the latest value can be judged against this "
+                       "service's own normal rather than an absolute threshold.",
         "parameters": {"type": "object", "properties": {
             "metric": {"type": "string", "enum": list(METRICS)},
             "minutes": {"type": "integer", "minimum": 5, "maximum": 1440},
@@ -54,6 +56,17 @@ TOOLS = [
 ]
 
 
+def _stats(points: list[dict]) -> dict:
+    """Context for judging the latest value against this service's own recent normal."""
+    vals = sorted(p["value"] for p in points if isinstance(p.get("value"), (int, float)))
+    if not vals:
+        return {}
+    latest = next(p["value"] for p in reversed(points) if isinstance(p.get("value"), (int, float)))
+    median = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
+    return {"latest": latest, "window_median": round(median, 4), "window_min": vals[0], "window_max": vals[-1],
+            "latest_vs_median": round(latest / median, 2) if median else None}
+
+
 def run_tool(evidence: Evidence, name: str, args: dict):
     if name == "get_recent_logs":
         minutes = int(args.get("minutes", 30))
@@ -65,7 +78,8 @@ def run_tool(evidence: Evidence, name: str, args: dict):
         metric = args.get("metric")
         if metric not in METRICS:
             raise ValueError(f"unknown metric {metric!r}; choose from {', '.join(METRICS)}")
-        return {"metric": metric, "points": evidence.metric_series(metric, int(args.get("minutes", 60)))}
+        points = evidence.metric_series(metric, int(args.get("minutes", 60)))
+        return {"metric": metric, "points": points, **_stats(points)}
     if name == "get_deploy_history":
         return {"deploys": evidence.deploys(int(args.get("hours", 24)))}
     if name == "search_past_incidents":

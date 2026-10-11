@@ -10,6 +10,7 @@ Hard rules (lessons from Citebase's silent outage):
   and the last round forces `decide`, so rounds aren't burned on chatter.
 """
 import json
+import re
 import logging
 import time
 from dataclasses import dataclass, field
@@ -57,6 +58,28 @@ def _client():
     return Groq(api_key=settings.groq_api_key, timeout=45, max_retries=1)
 
 
+RATE_LIMIT_RETRIES = 4
+MAX_RATE_LIMIT_WAIT_S = 65.0
+sleep = time.sleep  # patched in tests
+
+
+def rate_limit_delay(exc: Exception) -> float | None:
+    """Seconds to wait if `exc` is a 429, else None. Long waits mean a daily cap."""
+    if getattr(exc, "status_code", None) != 429:
+        return None
+    resp = getattr(exc, "response", None)
+    header = resp.headers.get("retry-after") if resp is not None and hasattr(resp, "headers") else None
+    try:
+        if header:
+            return float(header) + 0.5
+    except ValueError:
+        pass
+    m = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(exc))
+    if m:
+        return int(m.group(1) or 0) * 60 + float(m.group(2)) + 0.5
+    return 10.0
+
+
 def _valid_decision(args: dict) -> str | None:
     if args.get("action") not in ACTIONS:
         return f"action must be one of {', '.join(ACTIONS)}"
@@ -81,16 +104,27 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
 
     for round_i in range(max_rounds):
         last = round_i == max_rounds - 1
-        try:
-            resp = client.chat.completions.create(
-                model=model, messages=messages, tools=TOOLS, temperature=0.2, max_tokens=1200,
-                tool_choice={"type": "function", "function": {"name": "decide"}} if last else "auto",
-            )
-        except Exception as exc:  # noqa: BLE001 — every provider failure ends here, loudly
-            failures += 1
-            logger.exception("Triage model call failed (round %s)", round_i + 1)
-            if failures >= 2 or last:
-                raise AgentUnavailable(f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+        resp = None
+        for waited in range(RATE_LIMIT_RETRIES + 1):
+            try:
+                resp = client.chat.completions.create(
+                    model=model, messages=messages, tools=TOOLS, temperature=0.2, max_tokens=1200,
+                    tool_choice={"type": "function", "function": {"name": "decide"}} if last else "auto",
+                )
+                break
+            except Exception as exc:  # noqa: BLE001 — every provider failure ends here, loudly
+                delay = rate_limit_delay(exc)
+                if delay is not None and delay <= MAX_RATE_LIMIT_WAIT_S and waited < RATE_LIMIT_RETRIES:
+                    # A per-minute limit: wait it out and retry the same round (it isn't a failure).
+                    logger.warning("Triage model rate-limited; retrying in %.1fs", delay)
+                    sleep(delay)
+                    continue
+                failures += 1
+                logger.warning("Triage model call failed (round %s): %s", round_i + 1, str(exc)[:300])
+                if failures >= 2 or last or delay is not None:
+                    raise AgentUnavailable(f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+                break
+        if resp is None:
             continue
         usage = getattr(resp, "usage", None)
         tokens_in += getattr(usage, "prompt_tokens", 0) or 0

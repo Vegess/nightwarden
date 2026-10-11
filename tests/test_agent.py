@@ -74,3 +74,42 @@ def test_prompt_contains_no_signal_to_action_mapping():
     from app.agent.prompts import SYSTEM_PROMPT
     for kind in ("fallback", "zero_chunks", "429", "traffic_drop", "error_spike"):
         assert kind not in SYSTEM_PROMPT
+
+
+class _RateLimited(Exception):
+    status_code = 429
+
+    def __init__(self, msg="Rate limit reached ... Please try again in 2.385s."):
+        super().__init__(msg)
+        self.response = None
+
+
+def test_per_minute_rate_limit_waits_and_keeps_the_round(scripted, monkeypatch):
+    from app.agent import orchestrator
+    from tests.conftest import tool_call
+    waits = []
+    monkeypatch.setattr(orchestrator, "sleep", waits.append)
+    client = scripted([_RateLimited(), _RateLimited(),
+                       [tool_call("decide", {"action": "notify", "confidence": "medium",
+                                             "summary": "s", "rationale": "r"})]])
+    r = orchestrator.triage({"kind": "error_spike", "detail": "x", "metrics": {}}, build(1, 0)[1], client=client, max_rounds=2)
+    assert r.action == "notify" and r.rounds == 1
+    assert [round(w, 1) for w in waits] == [2.9, 2.9]
+
+
+def test_daily_cap_is_not_waited_out(scripted, monkeypatch):
+    import pytest
+    from app.agent import orchestrator
+    monkeypatch.setattr(orchestrator, "sleep", lambda s: pytest.fail("should not sleep"))
+    client = scripted([_RateLimited("tokens per day (TPD) ... Please try again in 12m30.5s.")])
+    with pytest.raises(orchestrator.AgentUnavailable):
+        orchestrator.triage({"kind": "error_spike", "detail": "x", "metrics": {}}, build(1, 0)[1], client=client)
+
+
+def test_get_metrics_adds_the_window_median_for_context():
+    from app.agent.tools import run_tool
+    _, evidence = build(12, 0)
+    out = run_tool(evidence, "get_metrics", {"metric": "latency_p95_ms", "minutes": 60})
+    vals = sorted(p["value"] for p in out["points"])
+    assert out["window_min"] == vals[0] and out["window_max"] == vals[-1]
+    assert out["latest"] == out["points"][-1]["value"] and out["latest_vs_median"] > 0
