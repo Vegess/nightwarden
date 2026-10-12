@@ -49,6 +49,38 @@ def test_dashboard_reads_the_trace_fields_the_orchestrator_writes():
     from pathlib import Path
     from app.agent import orchestrator
     src = inspect.getsource(orchestrator)
-    html = (Path(__file__).parents[1] / "app" / "static" / "index.html").read_text()
+    html = (Path(__file__).parents[1] / "app" / "static" / "app.js").read_text()
     for field in ("tool", "args", "result_preview"):
         assert f'"{field}"' in src and f"c.{field}" in html
+
+
+def test_public_views_hide_tool_results_admin_sees_them(db, monkeypatch):
+    import json
+    from app.db.models import Decision, Event
+    c = client(db, monkeypatch)
+    ev = Event(service="citebase", kind="error_spike", detail="x", metrics="{}", source="live")
+    db.add(ev)
+    db.flush()
+    db.add(Decision(event_id=ev.id, triager="agent", action="notify", confidence="medium", summary="s", rationale="r",
+                    tool_calls=json.dumps([{"round": 1, "tool": "get_recent_logs", "args": {"minutes": 30},
+                                            "result_preview": "Unhandled error ..."}])))
+    db.commit()
+    public = c.get("/api/decisions").json()[0]["tool_calls"][0]
+    assert "result_preview" not in public and public["result_hidden"] and public["tool"] == "get_recent_logs"
+    admin = c.get("/api/decisions", headers={"Authorization": "Bearer secret"}).json()[0]["tool_calls"][0]
+    assert admin["result_preview"] == "Unhandled error ..."
+    wrong = c.get("/api/decisions", headers={"Authorization": "Bearer nope"}).json()[0]["tool_calls"][0]
+    assert "result_preview" not in wrong
+
+
+def test_security_headers_rate_limit_and_no_docs(db, monkeypatch):
+    c = client(db, monkeypatch)
+    r = c.get("/")
+    assert "script-src 'self'" in r.headers["content-security-policy"] and "unsafe-inline" not in r.text
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert c.get("/docs").status_code == 404 and c.get("/openapi.json").status_code == 404
+    from app.core.security import HITS
+    HITS.clear()  # defaults: 120 reads/min, 10 writes/min per client
+    statuses = [c.post("/api/deploys", json={}, headers={"Authorization": "Bearer nope"}).status_code for _ in range(12)]
+    assert statuses[:10] == [401] * 10 and statuses[-1] == 429
+    assert c.get("/health").status_code == 200  # never limited
