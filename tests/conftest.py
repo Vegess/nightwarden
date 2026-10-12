@@ -56,3 +56,10 @@ class ScriptedClient:
 @pytest.fixture()
 def scripted():
     return ScriptedClient
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit():
+    from app.core.security import HITS
+    HITS.clear()
+    yield

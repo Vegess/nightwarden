@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.collector import poller
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.security import RateLimit, SecurityHeaders
 from app.routes import api, health
 
 settings = get_settings()
@@ -28,7 +29,9 @@ async def lifespan(app: FastAPI):
         stop.set()
 
 
-app = FastAPI(title="Nightwarden", lifespan=lifespan)
+app = FastAPI(title="Nightwarden", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app.add_middleware(RateLimit)
+app.add_middleware(SecurityHeaders)
 app.include_router(health.router)
 app.include_router(api.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

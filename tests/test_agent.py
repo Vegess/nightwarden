@@ -113,3 +113,26 @@ def test_get_metrics_adds_the_window_median_for_context():
     vals = sorted(p["value"] for p in out["points"])
     assert out["window_min"] == vals[0] and out["window_max"] == vals[-1]
     assert out["latest"] == out["points"][-1]["value"] and out["latest_vs_median"] > 0
+
+
+def test_last_round_offers_only_decide(scripted):
+    event, evidence = build(1, 0)
+    client = scripted([[tool_call("get_recent_logs", {"minutes": 30})], [tool_call("decide", DECIDE, 1)]])
+    triage(event, evidence, client=client, max_rounds=2)
+    assert len(client.requests[0]["tools"]) == 5
+    assert [t["function"]["name"] for t in client.requests[-1]["tools"]] == ["decide"]
+
+
+def test_discord_alert_is_an_embed_and_only_pages_mention(monkeypatch):
+    from app.services import notify
+    posted = []
+
+    class R:
+        def raise_for_status(self): pass
+    monkeypatch.setattr(notify.settings, "notify_webhook_url", "https://discord.com/api/webhooks/1/x")
+    monkeypatch.setattr(notify.httpx, "post", lambda url, json, timeout: posted.append(json) or R())
+    notify._webhook("t", "page", "citebase: fallbacks", "logs show 401", "https://nw/#incidents/1")
+    notify._webhook("t", "notify", "citebase: 429s", "rate limited", None)
+    page, note = posted
+    assert page["embeds"][0]["url"].endswith("/#incidents/1") and page["content"] == "@here"
+    assert note["content"] is None and note["allowed_mentions"] == {"parse": []}

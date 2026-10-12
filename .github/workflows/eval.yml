@@ -14,6 +14,12 @@ on:
       pause:
         description: "Seconds between cases (free-tier rate limits)"
         default: "8"
+      model:
+        description: "Groq model"
+        default: "openai/gpt-oss-120b"
+      label:
+        description: "Name for this eval version (resume only continues runs with the same name)"
+        default: "v2"
       resume:
         description: "Continue from the last run's results (only run missing cases)"
         type: boolean
@@ -39,13 +45,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow eval.yml --status success \
-                   --json databaseId -q '.[0].databaseId')
-          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n eval-results -D "$RUNNER_TEMP/prev"
-          cp "$RUNNER_TEMP/prev/results.json" eval/results.json
+          # The newest successful run that produced results under the same label.
+          for run_id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow eval.yml --status success \
+                          --limit 20 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n "eval-results-${{ inputs.label }}" \
+                 -D "$RUNNER_TEMP/prev" 2>/dev/null; then
+              cp "$RUNNER_TEMP/prev/results.json" eval/results.json
+              echo "Resuming from run $run_id"; exit 0
+            fi
+          done
+          echo "No earlier results labelled ${{ inputs.label }}; starting fresh"
       - name: Run agent + baseline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ inputs.model }}
         run: >
           python -m eval.run_eval --agent --reps ${{ inputs.reps }} --from-rep ${{ inputs.from_rep }} --pause ${{ inputs.pause }}
           ${{ inputs.resume && '--only-missing' || '' }}
@@ -55,5 +68,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: eval-results
+          name: eval-results-${{ inputs.label }}
           path: eval/results.json

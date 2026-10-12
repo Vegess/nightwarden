@@ -35,13 +35,28 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
+def is_admin(authorization: str | None = Header(default=None)) -> bool:
+    """Optional admin view: the same pages, with raw evidence (tool results) included."""
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    return bool(settings.admin_token and token and compare_digest(token, settings.admin_token))
+
+
+def _public_calls(calls: list[dict], full: bool) -> list[dict]:
+    # Tool names, arguments and the size of each result are public; the result itself (log lines,
+    # metric points) is admin-only. Logs are redacted at collection, this is a second layer.
+    if full:
+        return calls
+    return [{**{k: v for k, v in c.items() if k != "result_preview"},
+             **({"result_hidden": True} if "result_preview" in c else {})} for c in calls]
+
+
 def _iso(dt):
     return (dt if dt is None or dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat() if dt else None
 
 
-def _decision_out(d: Decision, event: Event | None = None) -> dict:
+def _decision_out(d: Decision, event: Event | None = None, full: bool = False) -> dict:
     return {"id": d.id, "ts": _iso(d.ts), "triager": d.triager, "action": d.action, "confidence": d.confidence,
-            "summary": d.summary, "rationale": d.rationale, "tool_calls": json.loads(d.tool_calls or "[]"),
+            "summary": d.summary, "rationale": d.rationale, "tool_calls": _public_calls(json.loads(d.tool_calls or "[]"), full),
             "rounds": d.rounds, "latency_ms": d.latency_ms, "tokens": d.tokens_in + d.tokens_out,
             "degraded": d.degraded, "incident_id": d.incident_id,
             **({"event": {"kind": event.kind, "detail": event.detail, "metrics": json.loads(event.metrics or "{}")}}
@@ -95,20 +110,20 @@ def incidents(status: str | None = None, limit: int = 50, db: Session = Depends(
 
 
 @router.get("/incidents/{incident_id}")
-def incident(incident_id: str, db: Session = Depends(get_db)):
+def incident(incident_id: str, db: Session = Depends(get_db), full: bool = Depends(is_admin)):
     inc = db.get(Incident, incident_id)
     if inc is None:
         raise HTTPException(status_code=404, detail="Incident not found")
     rows = db.execute(select(Decision, Event).join(Event, Event.id == Decision.event_id)
                       .where(Decision.incident_id == inc.id).order_by(Decision.ts)).all()
-    return {**_incident_out(inc), "decisions": [_decision_out(d, e) for d, e in rows]}
+    return {**_incident_out(inc), "decisions": [_decision_out(d, e, full) for d, e in rows]}
 
 
 @router.get("/decisions")
-def decisions(limit: int = 30, db: Session = Depends(get_db)):
+def decisions(limit: int = 30, db: Session = Depends(get_db), full: bool = Depends(is_admin)):
     rows = db.execute(select(Decision, Event).join(Event, Event.id == Decision.event_id)
                       .where(Event.source != "eval").order_by(Decision.ts.desc()).limit(max(1, min(limit, 100)))).all()
-    return [_decision_out(d, e) for d, e in rows]
+    return [_decision_out(d, e, full) for d, e in rows]
 
 
 @router.get("/eval")
@@ -149,7 +164,7 @@ def manual_event(body: EventIn, db: Session = Depends(get_db)):
     db.add(event)
     db.commit()
     d = triage.run(db, event, LiveEvidence(db, settings.target_name, fetch_logs=poller._safe_fetch_logs))
-    return _decision_out(d, event)
+    return _decision_out(d, event, full=True)
 
 
 @router.post("/incidents/{incident_id}/resolve", dependencies=[Depends(require_admin)])
