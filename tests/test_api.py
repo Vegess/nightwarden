@@ -111,3 +111,22 @@ def test_events_left_without_a_decision_are_triaged_on_the_next_poll(db, monkeyp
     assert poller.triage_pending(db, now) == 1
     assert db.query(Decision).one().action == "page"  # degraded (no key in tests) still pages a fallback spike
     assert poller.triage_pending(db, now) == 0
+
+
+def test_stats_counts_uptime_incidents_and_time_to_resolve(db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app.db.models import Incident, Snapshot
+    c = client(db, monkeypatch)
+    now = datetime.now(timezone.utc)
+    for i, ok in enumerate([True, True, True, False]):
+        db.add(Snapshot(service="citebase", ok=ok, ts=now - timedelta(minutes=14 * i), raw="{}", derived="{}"))
+    db.add(Incident(service="citebase", kind="error_spike", severity="page", status="resolved", summary="s",
+                    opened_at=now - timedelta(hours=2), updated_at=now - timedelta(hours=1),
+                    closed_at=now - timedelta(hours=1)))
+    db.add(Incident(service="citebase", kind="latency_spike", severity="notify", status="open", summary="s",
+                    opened_at=now - timedelta(minutes=30), updated_at=now))
+    db.commit()
+    s = c.get("/api/stats").json()
+    assert s["uptime_24h"] == {"pct": 0.75, "polls": 4}
+    assert s["incidents_7d"] == 2 and s["pages_7d"] == 1 and s["open_incidents"] == 1
+    assert s["mttr_s"] == 3600 and s["resolved_30d"] == 1
