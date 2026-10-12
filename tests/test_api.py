@@ -84,3 +84,30 @@ def test_security_headers_rate_limit_and_no_docs(db, monkeypatch):
     statuses = [c.post("/api/deploys", json={}, headers={"Authorization": "Bearer nope"}).status_code for _ in range(12)]
     assert statuses[:10] == [401] * 10 and statuses[-1] == 429
     assert c.get("/health").status_code == 200  # never limited
+
+
+def test_cron_poll_needs_the_secret_and_runs_one_cycle(db, monkeypatch):
+    from app.collector import poller
+    from app.core.config import get_settings
+    from tests.test_collector import raw
+    c = client(db, monkeypatch)
+    monkeypatch.setattr(get_settings(), "cron_secret", None)
+    assert c.post("/api/cron/poll").status_code == 503
+    monkeypatch.setattr(get_settings(), "cron_secret", "cronkey")
+    assert c.post("/api/cron/poll", headers={"Authorization": "Bearer nope"}).status_code == 401
+    monkeypatch.setattr(poller.target, "fetch_metrics", lambda timeout=None: raw())
+    r = c.get("/api/cron/poll", headers={"Authorization": "Bearer cronkey"})
+    assert r.status_code == 200 and r.json() == {"reachable": True, "fired": []}
+
+
+def test_events_left_without_a_decision_are_triaged_on_the_next_poll(db, monkeypatch):
+    from datetime import datetime, timezone
+    from app.collector import poller
+    from app.db.models import Decision, Event
+    monkeypatch.setattr(poller, "_safe_fetch_logs", lambda **kw: [])
+    now = datetime(2026, 10, 12, 3, 0, tzinfo=timezone.utc)
+    db.add(Event(service="citebase", kind="fallback_spike", detail="cut off mid-triage", metrics="{}", source="live", ts=now))
+    db.commit()
+    assert poller.triage_pending(db, now) == 1
+    assert db.query(Decision).one().action == "page"  # degraded (no key in tests) still pages a fallback spike
+    assert poller.triage_pending(db, now) == 0

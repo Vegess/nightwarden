@@ -21,13 +21,12 @@ from sqlalchemy.orm import Session
 from app.agent.evidence import LiveEvidence
 from app.collector import detectors, signals, target
 from app.core.config import get_settings
-from app.db.models import Deploy, Event, Incident, Snapshot
+from app.db.models import Decision, Deploy, Event, Incident, Snapshot
 from app.db.session import SessionLocal
 from app.services import notify, triage
 
 logger = logging.getLogger("nightwarden.poller")
 settings = get_settings()
-DOWN_AFTER = 3
 WINDOW = timedelta(minutes=5, seconds=30)
 _state = {"last_poll": None, "last_ok": None, "running": False}
 
@@ -53,6 +52,18 @@ def _fire(db: Session, kind: str, detail: str, metrics: dict, now: datetime, tri
     return event
 
 
+def triage_pending(db: Session, now: datetime, triage_client=None, max_age_h: int = 3) -> int:
+    """Triage live events that never got a decision (e.g. a serverless invocation cut off mid-triage)."""
+    pending = db.scalars(
+        select(Event).where(Event.source == "live", Event.ts >= now - timedelta(hours=max_age_h),
+                            ~select(Decision.id).where(Decision.event_id == Event.id).exists())
+        .order_by(Event.ts)).all()
+    for event in pending:
+        evidence = LiveEvidence(db, settings.target_name, fetch_logs=_safe_fetch_logs, now=now)
+        triage.run(db, event, evidence, client=triage_client)
+    return len(pending)
+
+
 def _safe_fetch_logs(**kw):
     try:
         return target.fetch_logs(**kw)
@@ -73,9 +84,9 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
         db.add(Snapshot(service=service, ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}", ts=now))
         db.commit()
         recent = db.scalars(select(Snapshot).where(Snapshot.service == service).order_by(Snapshot.ts.desc())
-                            .limit(DOWN_AFTER)).all()
-        if len(recent) == DOWN_AFTER and not any(s.ok for s in recent):
-            e = _fire(db, "target_down", f"{DOWN_AFTER} polls in a row failed: {recent[0].error}", {}, now, triage_client)
+                            .limit(settings.down_after_polls)).all()
+        if len(recent) == settings.down_after_polls and not any(s.ok for s in recent):
+            e = _fire(db, "target_down", f"{settings.down_after_polls} polls in a row failed: {recent[0].error}", {}, now, triage_client)
             fired += [e] if e else []
         return fired
 
@@ -115,6 +126,7 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
         e = _fire(db, sig.kind, sig.detail, w, now, triage_client)
         fired += [e] if e else []
 
+    triage_pending(db, now, triage_client)
     triage.auto_resolve(db, now=now)
     db.execute(delete(Snapshot).where(Snapshot.ts < now - timedelta(days=7)).execution_options(synchronize_session=False))
     db.commit()

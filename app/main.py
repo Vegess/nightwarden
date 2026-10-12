@@ -21,7 +21,7 @@ STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    stop = poller.start() if settings.poller_enabled else None
+    stop = poller.start() if settings.poller_enabled and not settings.vercel else None
     if not settings.groq_api_key:
         logger.warning("GROQ_API_KEY not set: triage runs in degraded (rules-only) mode")
     yield
