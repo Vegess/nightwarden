@@ -101,6 +101,41 @@ def status(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/stats")
+def stats(db: Session = Depends(get_db)):
+    """Headline numbers for the dashboard: uptime as seen by the poller, incidents, time to resolve."""
+    now = datetime.now(timezone.utc)
+
+    def uptime(hours: int):
+        rows = db.execute(select(Snapshot.ok, func.count()).where(
+            Snapshot.service == settings.target_name, Snapshot.ts >= now - timedelta(hours=hours))
+            .group_by(Snapshot.ok)).all()
+        counts = {bool(ok): n for ok, n in rows}
+        total = sum(counts.values())
+        return {"pct": round(counts.get(True, 0) / total, 4) if total else None, "polls": total}
+
+    week = now - timedelta(days=7)
+    incidents_7d = db.scalars(select(Incident).where(Incident.opened_at >= week)).all()
+    resolved = db.scalars(select(Incident).where(Incident.closed_at.is_not(None),
+                                                 Incident.opened_at >= now - timedelta(days=30))).all()
+    durations = [(_aware(i.closed_at) - _aware(i.opened_at)).total_seconds() for i in resolved]
+    by_action = dict(db.execute(select(Decision.action, func.count()).join(Event, Event.id == Decision.event_id)
+                                .where(Event.source != "eval", Decision.ts >= week).group_by(Decision.action)).all())
+    return {
+        "uptime_24h": uptime(24), "uptime_7d": uptime(24 * 7),
+        "incidents_7d": len(incidents_7d),
+        "pages_7d": sum(1 for i in incidents_7d if i.severity == "page"),
+        "open_incidents": sum(1 for i in incidents_7d if i.status == "open"),
+        "mttr_s": round(sum(durations) / len(durations)) if durations else None,
+        "resolved_30d": len(durations),
+        "decisions_7d": by_action,
+    }
+
+
+def _aware(dt):
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 @router.get("/incidents")
 def incidents(status: str | None = None, limit: int = 50, db: Session = Depends(get_db)):
     q = select(Incident).order_by(Incident.opened_at.desc()).limit(max(1, min(limit, 200)))
