@@ -39,7 +39,7 @@ def test_eval_endpoint_returns_a_summary(db, monkeypatch):
     r = client(db, monkeypatch).get("/api/eval").json()
     if r["available"]:
         s = r["summary"]
-        assert s["baseline"]["n"] == len(s["per_scenario"]) * 5
+        assert s["baseline"]["n"] == len(s["per_scenario"]) * len(s["reps"])
         assert {"accuracy", "silent_recall", "page_recall"} <= s["baseline"].keys()
 
 

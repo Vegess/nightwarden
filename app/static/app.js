@@ -134,7 +134,7 @@ async function renderEval() {
     const bar = (v, c) => `<div class="bar"><span style="width:${(v ?? 0) * 100}%;background:${c}"></span></div>`;
     el.innerHTML = `
       <h2 style="margin-top:0">Agent vs. frozen rules baseline</h2>
-      <p class="muted">${b.n} labelled cases: 12 failure scenarios × 5 seeded variations. Labels and the baseline were frozen before the agent was written.
+      <p class="muted">${b.n} held-out cases (12 failure scenarios, variations ${(s.reps || []).join(", ")}), never inspected before the run. Labels and the rules baseline were frozen before the agent was written; both columns are scored on the same cases.
         ${hasAgent ? `Agent model: <span class="mono">${esc(r.model)}</span>.` : "Agent results not published yet; showing the baseline only."}
         Generated ${when(r.generated_at)}.</p>
       <div class="card scroll"><table>

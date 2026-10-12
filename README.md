@@ -50,6 +50,46 @@ Citebase /metrics, /metrics/logs
 expected actions (`harness/labels.yaml`) and the rules baseline (`app/agent/baseline.py`) were written and frozen
 **before** the agent existed, so neither could be tuned to make the agent look good.
 
+**Held-out result** (variations 1–4: 48 cases never looked at before the run; `openai/gpt-oss-120b`, 11–12 Oct 2026;
+both columns scored on the same 48 cases):
+
+| Metric | Rules baseline | Agent |
+|---|---|---|
+| Action accuracy | 41.7% | **60.4%** |
+| Page recall (real emergencies paged) | 20.0% | **95.0%** |
+| Page precision (pages that were real) | 100.0% | 82.6% |
+| Silent-degradation recall | 0.0% | **75.0%** |
+| Accuracy on loud failures | 55.6% | 55.6% |
+| Median tool calls · mean tokens / event | — | 4 · 6,409 |
+| p95 decision time | ~0 s | 39.5 s (includes free-tier rate-limit waits) |
+
+| # | Scenario | Expected | Rules | Agent |
+|---|---|---|---|---|
+| 1 | invalid API key | page | 0/4 | 4/4 |
+| 2 | model decommissioned | page | 0/4 | 4/4 |
+| 3 | LLM timeout | notify | 4/4 | 4/4 |
+| 4 | vector store emptied *(silent)* | page | 0/4 | 4/4 |
+| 5 | migration missing | page | 4/4 | 4/4 |
+| 6 | wrong API base *(silent)* | notify | 0/4 | 2/4 |
+| 7 | silent fallback *(silent)* | page | 0/4 | 3/4 |
+| 8 | rate-limiter storm | notify | 0/4 | 2/4 |
+| 9 | clean traffic spike | suppress | 4/4 | 0/4 |
+| 10 | transient 500, once | suppress | 0/4 | 0/4 |
+| 11 | transient 500, repeating | notify | 4/4 | 2/4 |
+| 12 | normal traffic (control) | suppress | 4/4 | 0/4 |
+
+**What it means.** The agent finds the failures that matter: 19 of 20 real emergencies paged, against 4 of 20 for the
+rules. The one miss was a silent fallback it flagged as *notify* instead of *page*; the rules caught none of the
+silent failures. Its weakness is the opposite of
+the rules': it never dismisses anything. On the 12 benign cases it chose *watch* 8 times and *notify* 4 times,
+never *suppress*; and it over-paged 4 of 16 notify-level problems. It also didn't weigh repetition: for the
+repeating transient error it searched past incidents in 2 of 4 runs, saw the earlier occurrences, and still chose
+*watch*. (A post-hoc reading, not a pre-registered metric: *watch* records without interrupting anyone, so the
+benign cases produced 4 unnecessary notifications in 12, and no pages.)
+
+The development-run results are in `eval/results-dev.json`; the held-out results are `eval/results.json`
+and appear on the dashboard's Evaluation tab.
+
 **Development run** (variation 0 of each scenario, 12 cases, `openai/gpt-oss-120b`, 11 Oct 2026). These cases
 have been looked at, so they're a development set, not the headline result:
 
@@ -67,9 +107,6 @@ vector store) but over-escalates: it paged for an LLM timeout and for a traffic 
 called normal latency "high" on quiet controls because it had nothing to compare against. One change was made after
 this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
 the model judges a value against the service's own normal. Labels and the baseline were not touched.
-
-**Held-out result** (variations 1–4, 48 cases never inspected): *pending*. Run with
-`python -m eval.run_eval --agent --from-rep 1`.
 
 Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
 approximate Citebase's real logs but aren't real incidents.
