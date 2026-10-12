@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     target_metrics_token: str | None = None
     poll_interval_s: int = 60
     poll_timeout_s: int = 70          # long enough for a free-tier cold start
-    poller_enabled: bool = True
+    poller_enabled: bool = True       # background thread; off on serverless hosts (Vercel)
+    down_after_polls: int = 3         # consecutive failed polls before target_down
+    # Serverless mode: an external scheduler calls /api/cron/poll with this bearer secret.
+    cron_secret: str | None = None
+    vercel: bool = False              # set to 1 by Vercel itself; disables the background thread
 
     # Triage agent (Groq, OpenAI-compatible tool calling).
     groq_api_key: str | None = None

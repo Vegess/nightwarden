@@ -1,10 +1,3 @@
----
-title: Nightwarden
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Nightwarden
 
 An AI on-call agent that watches [Citebase](https://documind-beta-lac.vercel.app) (my multi-tenant RAG app) and
@@ -42,7 +35,9 @@ Citebase /metrics, /metrics/logs
   failure signals (fallback spike, zero chunks, target down) always page. It never goes quiet because its own AI broke.
 - **Incidents.** Repeats of the same kind within 6 hours merge into one incident; alerts go out only when an incident
   opens or gets more severe. Incidents resolve themselves after 3 quiet hours.
-- **Watching the watcher.** UptimeRobot checks `/health`; every poll pings a healthchecks.io dead-man switch.
+- **Watching the watcher.** Every poll pings a healthchecks.io dead-man switch; if polls stop, it emails.
+- **Runs anywhere.** As a long-running container (Docker, background poller) or serverless on Vercel, where an
+  external scheduler calls `/api/cron/poll` and events cut off mid-triage are picked up on the next poll.
 
 ## Evaluation
 
@@ -128,7 +123,7 @@ python -m eval.run_eval --agent    # agent + baseline (uses Groq quota)
 python -m eval.report              # comparison tables
 ```
 
-Deploying (Hugging Face Space + Neon) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
+Deploying (Vercel + Neon + an external scheduler) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
 decisions are in [docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
 
 ## API

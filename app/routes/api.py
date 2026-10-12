@@ -137,6 +137,22 @@ def eval_results():
             "summary": summarize(data)}
 
 
+def require_cron(authorization: str | None = Header(default=None)) -> None:
+    if not settings.cron_secret:
+        raise HTTPException(status_code=503, detail="CRON_SECRET is not configured")
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if not compare_digest(token, settings.cron_secret):
+        raise HTTPException(status_code=401, detail="Invalid cron secret")
+
+
+@router.api_route("/cron/poll", methods=["GET", "POST"], dependencies=[Depends(require_cron)])
+def cron_poll(db: Session = Depends(get_db)):
+    """Serverless mode: one poll cycle per call (an external scheduler calls this every ~14 min)."""
+    fired = poller.poll_once(db)
+    latest = db.scalar(select(Snapshot).where(Snapshot.service == settings.target_name).order_by(Snapshot.ts.desc()))
+    return {"reachable": bool(latest and latest.ok), "fired": [e.kind for e in fired]}
+
+
 class DeployIn(BaseModel):
     commit: str | None = Field(default=None, max_length=64)
     note: str | None = Field(default=None, max_length=300)

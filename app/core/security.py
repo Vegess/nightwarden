@@ -13,8 +13,7 @@ from starlette.responses import JSONResponse
 
 HEADERS = {
     "Content-Security-Policy": ("default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; "
-                                "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' "
-                                "https://huggingface.co https://*.hf.space"),
+                                "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
