@@ -100,7 +100,7 @@ def run(db: Session, event: Event, evidence: Evidence, client=None) -> Decision:
                 extra={"event_id": event.id, "decision_id": decision.id, "action": result.action,
                        "degraded": degraded, "rounds": result.rounds, "latency_ms": result.latency_ms})
     if should_alert and result.action in ("page", "notify"):
-        link = f"{settings.public_url.rstrip('/')}/#incidents/{incident.id}"
+        link = f"{settings.public_url.rstrip('/')}/incidents/{incident.id}"
         notify.alert(result.action, f"{event.service}: {result.summary}"[:180],
                      (result.rationale[:700] + ("\n(degraded: decided without AI)" if degraded else "")), link)
     return decision

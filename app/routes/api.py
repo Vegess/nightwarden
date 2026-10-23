@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agent.evidence import LiveEvidence
+from app.agent.tools import summarize_result
 from app.collector import poller
 from app.core.config import get_settings
 from app.db.models import Decision, Deploy, Event, Incident, Snapshot
@@ -41,13 +42,31 @@ def is_admin(authorization: str | None = Header(default=None)) -> bool:
     return bool(settings.admin_token and token and compare_digest(token, settings.admin_token))
 
 
+def _with_summary(c: dict) -> dict:
+    """Decisions recorded before result_summary existed: derive it from the stored preview when it parses."""
+    if "result_summary" in c or "result_preview" not in c:
+        return c
+    try:
+        return {**c, "result_summary": summarize_result(c.get("tool", ""), json.loads(c["result_preview"]))}
+    except (TypeError, ValueError):
+        return c
+
+
 def _public_calls(calls: list[dict], full: bool) -> list[dict]:
-    # Tool names, arguments and the size of each result are public; the result itself (log lines,
-    # metric points) is admin-only. Logs are redacted at collection, this is a second layer.
+    # Tool names, arguments, a short count-only summary and timings are public; the result itself
+    # (log lines, metric points) is admin-only. Logs are redacted at collection, this is a second layer.
+    calls = [_with_summary(c) for c in calls]
     if full:
         return calls
     return [{**{k: v for k, v in c.items() if k != "result_preview"},
              **({"result_hidden": True} if "result_preview" in c else {})} for c in calls]
+
+
+def decided_by(d: Decision) -> str:
+    """Which path produced a decision: the AI provider's name, or "rules"."""
+    if d.triager != "agent":
+        return "rules"
+    return getattr(d, "provider", None) or "groq"
 
 
 def _iso(dt):
@@ -58,7 +77,7 @@ def _decision_out(d: Decision, event: Event | None = None, full: bool = False) -
     return {"id": d.id, "ts": _iso(d.ts), "triager": d.triager, "action": d.action, "confidence": d.confidence,
             "summary": d.summary, "rationale": d.rationale, "tool_calls": _public_calls(json.loads(d.tool_calls or "[]"), full),
             "rounds": d.rounds, "latency_ms": d.latency_ms, "tokens": d.tokens_in + d.tokens_out,
-            "degraded": d.degraded, "incident_id": d.incident_id,
+            "degraded": d.degraded, "decided_by": decided_by(d), "incident_id": d.incident_id,
             **({"event": {"kind": event.kind, "detail": event.detail, "metrics": json.loads(event.metrics or "{}")}}
                if event else {})}
 
@@ -182,7 +201,7 @@ def require_cron(authorization: str | None = Header(default=None)) -> None:
 
 @router.api_route("/cron/poll", methods=["GET", "POST"], dependencies=[Depends(require_cron)])
 def cron_poll(db: Session = Depends(get_db)):
-    """Serverless mode: one poll cycle per call (an external scheduler calls this every ~14 min)."""
+    """Serverless mode: one poll cycle per call (an external scheduler calls this every 10 min)."""
     fired = poller.poll_once(db)
     latest = db.scalar(select(Snapshot).where(Snapshot.service == settings.target_name).order_by(Snapshot.ts.desc()))
     return {"reachable": bool(latest and latest.ok), "fired": [e.kind for e in fired]}

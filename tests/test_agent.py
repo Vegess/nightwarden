@@ -136,3 +136,27 @@ def test_discord_alert_is_an_embed_and_only_pages_mention(monkeypatch):
     page, note = posted
     assert page["embeds"][0]["url"].endswith("/#incidents/1") and page["content"] == "@here"
     assert note["content"] is None and note["allowed_mentions"] == {"parse": []}
+
+
+def test_every_step_records_duration_and_a_public_safe_summary(scripted):
+    event, evidence = build(1, 0)
+    client = scripted([
+        [tool_call("get_recent_logs", {"minutes": 30})],
+        [tool_call("get_metrics", {"metric": "nope", "minutes": 60}, 1)],
+        [tool_call("decide", DECIDE, 2)],
+    ])
+    r = triage(event, evidence, client=client, max_rounds=6)
+    logs, bad, decide = r.tool_calls
+    assert all(isinstance(c["duration_ms"], int) and c["duration_ms"] >= 0 for c in r.tool_calls)
+    assert logs["result_summary"].endswith("log lines") and "Invalid API Key" not in logs["result_summary"]
+    assert bad["result_summary"].startswith("error:") and "result_summary" not in decide
+
+
+def test_summarize_result_counts_never_quotes_content():
+    from app.agent.tools import summarize_result
+    assert summarize_result("get_recent_logs", {"count": 1, "lines": ["secret@x.com failed"]}) == "1 log line"
+    assert summarize_result("get_metrics", {"metric": "error_rate", "points": [{"value": 0.2}] * 3, "latest": 0.2,
+                                            "window_median": 0.1}) == "3 points · latest 0.2 (median 0.1)"
+    assert summarize_result("get_metrics", {"metric": "error_rate", "points": []}) == "no error_rate data"
+    assert summarize_result("get_deploy_history", {"deploys": []}) == "no recent deploys"
+    assert summarize_result("search_past_incidents", {"incidents": [{}, {}]}) == "2 past incidents"
