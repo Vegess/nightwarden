@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from app.agent.evidence import Evidence
 from app.agent.prompts import SYSTEM_PROMPT
-from app.agent.tools import ACTIONS, CONFIDENCE, TOOLS, run_tool
+from app.agent.tools import ACTIONS, CONFIDENCE, TOOLS, run_tool, summarize_result
 from app.core.config import get_settings
 
 logger = logging.getLogger("nightwarden.agent")
@@ -103,7 +103,17 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
     calls: list[dict] = []
     tokens_in = tokens_out = 0
     start = time.perf_counter()
+    mark = start  # end of the previous step: each step's duration includes the model's thinking before it
     failures = 0
+
+    def close_step(result=None) -> None:
+        """Stamp the latest call with its duration and a public-safe result summary."""
+        nonlocal mark
+        now = time.perf_counter()
+        calls[-1]["duration_ms"] = int((now - mark) * 1000)
+        mark = now
+        if result is not None:
+            calls[-1]["result_summary"] = summarize_result(calls[-1]["tool"], result)
 
     for round_i in range(max_rounds):
         last = round_i == max_rounds - 1
@@ -157,6 +167,7 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
             if name == "decide" and result is None:
                 problem = _valid_decision(args)
                 if problem is None:
+                    close_step()
                     return TriageResult(
                         action=args["action"], confidence=args["confidence"],
                         summary=str(args["summary"])[:300], rationale=str(args["rationale"])[:4000],
@@ -169,6 +180,7 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
                     result = run_tool(evidence, name, args)
                 except Exception as exc:  # noqa: BLE001 — tell the model, don't crash the triage
                     result = {"error": f"{type(exc).__name__}: {exc}"}
+            close_step(result)
             calls[-1]["result_preview"] = json.dumps(result, default=str)[:600]
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)[:6000]})
 

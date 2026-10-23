@@ -85,3 +85,29 @@ def run_tool(evidence: Evidence, name: str, args: dict):
     if name == "search_past_incidents":
         return {"incidents": evidence.past_incidents(str(args.get("query", "")), int(args.get("limit", 5)))}
     raise ValueError(f"unknown tool {name!r}")
+
+
+def summarize_result(name: str, result) -> str:
+    """One short, public-safe line about a tool result: counts and numbers, never log text."""
+    if not isinstance(result, dict):
+        return "no result"
+    if "error" in result:
+        return "error: " + str(result["error"])[:80]
+    if name == "get_recent_logs":
+        n = result.get("count", len(result.get("lines") or []))
+        return f"{n} log line{'' if n == 1 else 's'}"
+    if name == "get_metrics":
+        n = len(result.get("points") or [])
+        if not n:
+            return f"no {result.get('metric', 'metric')} data"
+        out = f"{n} point{'' if n == 1 else 's'} · latest {result.get('latest')}"
+        if result.get("window_median") is not None:
+            out += f" (median {result['window_median']})"
+        return out
+    if name == "get_deploy_history":
+        n = len(result.get("deploys") or [])
+        return f"{n} deploy{'' if n == 1 else 's'}" if n else "no recent deploys"
+    if name == "search_past_incidents":
+        n = len(result.get("incidents") or [])
+        return f"{n} past incident{'' if n == 1 else 's'}" if n else "no matching past incidents"
+    return "done"

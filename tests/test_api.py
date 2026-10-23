@@ -50,7 +50,7 @@ def test_dashboard_reads_the_trace_fields_the_orchestrator_writes():
     from app.agent import orchestrator
     src = inspect.getsource(orchestrator)
     html = (Path(__file__).parents[1] / "app" / "static" / "app.js").read_text()
-    for field in ("tool", "args", "result_preview"):
+    for field in ("tool", "args", "result_preview", "result_summary", "duration_ms"):
         assert f'"{field}"' in src and f"c.{field}" in html
 
 
@@ -130,3 +130,57 @@ def test_stats_counts_uptime_incidents_and_time_to_resolve(db, monkeypatch):
     assert s["uptime_24h"] == {"pct": 0.75, "polls": 4}
     assert s["incidents_7d"] == 2 and s["pages_7d"] == 1 and s["open_incidents"] == 1
     assert s["mttr_s"] == 3600 and s["resolved_30d"] == 1
+
+
+def _incident_with_decision(db, triager="agent", calls=None):
+    import json
+    from app.db.models import Decision, Event, Incident
+    ev = Event(service="citebase", kind="fallback_spike", detail="40% fallbacks", metrics="{}", source="live")
+    inc = Incident(service="citebase", kind="fallback_spike", severity="page", summary="Answers are <fallbacks>")
+    db.add_all([ev, inc])
+    db.flush()
+    db.add(Decision(event_id=ev.id, incident_id=inc.id, triager=triager, action="page", confidence="high",
+                    summary="s", rationale="r", degraded=triager != "agent", tool_calls=json.dumps(calls or [])))
+    db.commit()
+    return inc
+
+
+def test_decisions_say_which_path_decided(db, monkeypatch):
+    c = client(db, monkeypatch)
+    agent = _incident_with_decision(db)
+    rules = _incident_with_decision(db, triager="degraded")
+    a = c.get(f"/api/incidents/{agent.id}").json()["decisions"][0]
+    r = c.get(f"/api/incidents/{rules.id}").json()["decisions"][0]
+    assert (a["decided_by"], a["degraded"]) == ("groq", False)
+    assert (r["decided_by"], r["degraded"]) == ("rules", True)
+
+
+def test_trace_summaries_are_public_and_derived_for_old_decisions(db, monkeypatch):
+    import json
+    c = client(db, monkeypatch)
+    old = {"round": 1, "tool": "get_recent_logs", "args": {"minutes": 30},
+           "result_preview": json.dumps({"count": 2, "lines": ["a", "b"]})}
+    new = {"round": 2, "tool": "get_deploy_history", "args": {"hours": 6}, "duration_ms": 812,
+           "result_summary": "no recent deploys", "result_preview": "{}"}
+    inc = _incident_with_decision(db, calls=[old, new])
+    steps = c.get(f"/api/incidents/{inc.id}").json()["decisions"][0]["tool_calls"]
+    assert steps[0]["result_summary"] == "2 log lines" and "result_preview" not in steps[0]
+    assert steps[1]["result_summary"] == "no recent deploys" and steps[1]["duration_ms"] == 812
+
+
+def test_incident_pages_have_shareable_urls(db, monkeypatch):
+    c = client(db, monkeypatch)
+    inc = _incident_with_decision(db)
+    r = c.get(f"/incidents/{inc.id}")
+    assert r.status_code == 200 and "<title>PAGE · Answers are &lt;fallbacks&gt; · Nightwarden</title>" in r.text
+    assert c.get("/incidents/does-not-exist").status_code == 404
+    for path in ("/incidents", "/eval", "/how", "/live"):
+        assert c.get(path).status_code == 200
+    fav = c.get("/favicon.ico")
+    assert fav.status_code == 200 and fav.headers["content-type"].startswith("image/svg+xml")
+
+
+def test_alert_links_point_at_the_incident_page():
+    import inspect
+    from app.services import triage
+    assert '/incidents/{incident.id}' in inspect.getsource(triage) and "#incidents" not in inspect.getsource(triage)

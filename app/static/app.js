@@ -98,6 +98,7 @@ const STATE = {
   down: { c: "var(--critical)", icon: "✕", label: "Unreachable" },
   wait: { c: "var(--muted)", icon: "…", label: "Waiting for the first poll" },
 };
+const POLL_NOTE = "Nightwarden polls Citebase every 10 minutes.";
 function statusOf(s) {
   if (!s.last_poll) return { ...STATE.wait };
   if (!s.reachable) return { ...STATE.down, label: "Unreachable", note: s.last_error };
@@ -107,136 +108,196 @@ function statusOf(s) {
 function tile(label, value, sub) {
   return `<div class="card"><div class="label">${label}</div><div class="big">${value}</div><div class="sub">${sub || "&nbsp;"}</div></div>`;
 }
+const emptyCard = (title, body) => `<div class="card empty-card"><strong>${title}</strong><p>${body}</p></div>`;
+const failCard = (what, e) => emptyCard(`Couldn't load ${what}`, `${esc(e?.message || e)}. Retrying in a minute.`);
+const pathText = (d) => d.decided_by || (d.degraded ? "rules" : "agent");
+const pathBadges = (d) => `<span class="pill plain path">decided by ${esc(pathText(d))}</span>${d.degraded ? '<span class="pill degraded">degraded</span>' : ""}`;
+const toolCount = (d) => (d.tool_calls || []).filter((c) => c.tool !== "decide").length;
 function decisionRow(d) {
-  const href = d.incident_id ? `#incidents/${d.incident_id}` : null;
+  const n = toolCount(d);
+  const href = d.incident_id ? `/incidents/${encodeURIComponent(d.incident_id)}` : null;
   const body = `<div class="card decision">
     <div class="row"><span class="pill ${esc(d.action)}">${esc(d.action)}</span>
-      <span class="pill plain">${esc(d.confidence)} confidence</span>
-      <span class="pill plain">${d.degraded ? "rules (AI unavailable)" : "AI agent"}</span>
+      <span class="pill plain">${esc(d.confidence)} confidence</span>${pathBadges(d)}
       <span class="muted">${when(d.ts)}${d.event ? " · " + esc(d.event.kind.replaceAll("_", " ")) : ""}</span></div>
     <p><strong>${esc(d.summary)}</strong></p>
-    <div class="sub">${(d.tool_calls || []).length} tool call${(d.tool_calls || []).length === 1 ? "" : "s"} · ${(d.latency_ms / 1000).toFixed(1)} s${href ? " · open the incident to replay the investigation" : ""}</div></div>`;
+    <div class="sub">${n} tool call${n === 1 ? "" : "s"} · ${(d.latency_ms / 1000).toFixed(1)} s${href ? " · open the incident to see the investigation" : ""}</div></div>`;
   return href ? `<a class="row-link" href="${href}">${body}</a>` : body;
+}
+function heroHtml(s) {
+  const k = statusOf(s);
+  return `<div class="card hero" style="--c:${k.c}">
+      <div class="ring" role="img" aria-label="${esc(k.label)}">
+        ${REDUCED || k.icon === "…" ? "" : '<div class="sweep"></div>'}
+        <svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="40" fill="none" stroke="var(--grid)" stroke-width="4"/>
+          <circle cx="46" cy="46" r="40" fill="none" stroke="${k.c}" stroke-width="4" stroke-dasharray="6 6" opacity=".9"/></svg>
+        <div class="icon">${k.icon}</div>
+      </div>
+      <div>
+        <h1>${esc(k.label)}</h1>
+        ${k.note ? `<div class="sub mono">${esc(k.note)}</div>` : ""}
+        ${!s.last_poll ? `<div class="sub">${POLL_NOTE} The first reading will appear here.</div>` : ""}
+        <div class="meta">
+          <span>watching ${esc(s.target_host || s.service)}</span>
+          <span>last poll ${ago(s.last_poll)}</span>
+          <span>AI triage: ${esc(s.ai_triage)}${s.last_triage_degraded ? " (last decision used rules)" : ""}</span>
+          ${s.commit ? `<span class="mono">commit ${esc(String(s.commit).slice(0, 7))}</span>` : ""}
+        </div>
+      </div>
+    </div>`;
+}
+function glanceHtml(st) {
+  const polls = st.uptime_7d?.polls ?? 0;
+  if (!polls && !st.incidents_7d && !st.resolved_30d) {
+    return emptyCard("No readings yet", `Uptime and incident numbers appear after the first successful poll. ${POLL_NOTE}`);
+  }
+  const up = (u) => (u?.pct == null ? "—" : (u.pct * 100).toFixed(u.pct === 1 ? 0 : 2) + "%");
+  const polled = (u) => (u?.polls ? `${u.polls} poll${u.polls === 1 ? "" : "s"}` : "no polls in this window");
+  return `<div class="grid tiles">
+      ${tile("Uptime · 24 h", up(st.uptime_24h), polled(st.uptime_24h))}
+      ${tile("Uptime · 7 days", up(st.uptime_7d), polled(st.uptime_7d))}
+      ${tile("Incidents · 7 days", st.incidents_7d, st.incidents_7d ? `${st.pages_7d} paged · ${st.open_incidents} open` : "All quiet")}
+      ${tile("Time to resolve", dur(st.mttr_s), st.resolved_30d ? `average of ${st.resolved_30d} in 30 days` : "no resolved incidents yet")}
+    </div>`;
+}
+function signalsHtml(s) {
+  const series = s.series || [];
+  const col = (key) => series.map((p) => ({ ts: p.ts, v: p[key] }));
+  const has = (key) => series.filter((p) => p[key] != null).length;
+  const keys = ["requests_5m", "error_rate", "fallback_rate", "latency_p95_ms"];
+  const most = Math.max(0, ...keys.map(has));
+  if (most < 2) {
+    return emptyCard("Not enough data for trends yet",
+      `Trends need at least two successful polls in the last 90 minutes; ${most ? "there is 1 so far" : "there are none yet"}. ${POLL_NOTE}`);
+  }
+  const w = s.window || {};
+  const card = (label, key, big, opts, note) => `<div class="card spark-card"><div class="label">${label}</div><div class="big">${big}</div>
+      ${has(key) >= 2 ? sparkline(col(key), opts) : '<p class="sub nodata">No data for this signal in the last 90 minutes.</p>'}
+      ${note ? `<div class="sub">${note}</div>` : ""}</div>`;
+  return `<div class="grid">
+      ${card("Requests per window", "requests_5m", w.requests_5m ?? "—", { color: "var(--agent)", fmt: (v) => v + " requests" })}
+      ${card("Server error rate", "error_rate", pct(w.error_rate), { color: "var(--critical)", fmt: (v) => pct(v), threshold: 0.05 }, "dashed line: 5 % alert threshold")}
+      ${card("Fallback answers", "fallback_rate", pct(w.fallback_rate), { color: "var(--warning)", fmt: (v) => pct(v), threshold: 0.2 }, "dashed line: 20 % alert threshold")}
+      ${card("p95 latency", "latency_p95_ms", w.latency_p95_ms != null ? Math.round(w.latency_p95_ms) + " ms" : "—",
+        { color: "var(--good)", fmt: (v) => Math.round(v) + " ms", threshold: 5000 }, "dashed line: 5 s alert threshold")}
+    </div>`;
 }
 async function renderLive() {
   const el = $("#live");
-  try {
-    const [s, st, decisions] = await Promise.all([get("/api/status"), get("/api/stats"), get("/api/decisions?limit=6")]);
-    $("#svc").textContent = s.service;
-    const k = statusOf(s), w = s.window || {};
-    const col = (key) => s.series.map((p) => ({ ts: p.ts, v: p[key] }));
-    const up = (u) => (u.pct == null ? "—" : (u.pct * 100).toFixed(u.pct === 1 ? 0 : 2) + "%");
-    el.innerHTML = `
-      <div class="card hero" style="--c:${k.c}">
-        <div class="ring" role="img" aria-label="${esc(k.label)}">
-          ${REDUCED || k.icon === "…" ? "" : '<div class="sweep"></div>'}
-          <svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="40" fill="none" stroke="var(--grid)" stroke-width="4"/>
-            <circle cx="46" cy="46" r="40" fill="none" stroke="${k.c}" stroke-width="4" stroke-dasharray="6 6" opacity=".9"/></svg>
-          <div class="icon">${k.icon}</div>
-        </div>
-        <div>
-          <h1>${esc(k.label)}</h1>
-          ${k.note ? `<div class="sub mono">${esc(k.note)}</div>` : ""}
-          <div class="meta">
-            <span>watching ${esc(s.target_host || s.service)}</span>
-            <span>last poll ${ago(s.last_poll)}</span>
-            <span>AI triage: ${esc(s.ai_triage)}${s.last_triage_degraded ? " (last decision used rules)" : ""}</span>
-            ${s.commit ? `<span class="mono">commit ${esc(String(s.commit).slice(0, 7))}</span>` : ""}
-          </div>
-        </div>
-      </div>
-      <h2>At a glance</h2>
-      <div class="grid tiles">
-        ${tile("Uptime · 24 h", up(st.uptime_24h), `${st.uptime_24h.polls} polls`)}
-        ${tile("Uptime · 7 days", up(st.uptime_7d), `${st.uptime_7d.polls} polls`)}
-        ${tile("Incidents · 7 days", st.incidents_7d, `${st.pages_7d} paged · ${st.open_incidents} open`)}
-        ${tile("Time to resolve", dur(st.mttr_s), st.resolved_30d ? `average of ${st.resolved_30d} in 30 days` : "no resolved incidents yet")}
-      </div>
-      <h2>Signals · last 90 minutes</h2>
-      <div class="grid">
-        <div class="card spark-card"><div class="label">Requests per window</div><div class="big">${w.requests_5m ?? "—"}</div>
-          ${sparkline(col("requests_5m"), { color: "var(--agent)", fmt: (v) => v + " requests" })}</div>
-        <div class="card spark-card"><div class="label">Server error rate</div><div class="big">${pct(w.error_rate)}</div>
-          ${sparkline(col("error_rate"), { color: "var(--critical)", fmt: (v) => pct(v), threshold: 0.05 })}<div class="sub">dashed line: 5 % alert threshold</div></div>
-        <div class="card spark-card"><div class="label">Fallback answers</div><div class="big">${pct(w.fallback_rate)}</div>
-          ${sparkline(col("fallback_rate"), { color: "var(--warning)", fmt: (v) => pct(v), threshold: 0.2 })}<div class="sub">dashed line: 20 % alert threshold</div></div>
-        <div class="card spark-card"><div class="label">p95 latency</div><div class="big">${w.latency_p95_ms != null ? Math.round(w.latency_p95_ms) + " ms" : "—"}</div>
-          ${sparkline(col("latency_p95_ms"), { color: "var(--good)", fmt: (v) => Math.round(v) + " ms", threshold: 5000 })}<div class="sub">dashed line: 5 s alert threshold</div></div>
-      </div>
-      <h2>Recent decisions</h2>
-      ${decisions.length ? `<div class="list">${decisions.map(decisionRow).join("")}</div>`
-        : `<p class="empty">Nothing has needed a decision yet. Detectors fire on errors, latency, fallback answers, empty retrieval and traffic anomalies.</p>`}`;
-  } catch (e) {
-    el.innerHTML = `<p class="empty">Couldn't load status (${esc(e.message)}). Retrying…</p>`;
-  }
+  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  const [s, st, decisions] = await Promise.allSettled([get("/api/status"), get("/api/stats"), get("/api/decisions?limit=6")]);
+  if (s.status === "fulfilled") $("#svc").textContent = s.value.service;
+  el.innerHTML = `
+    ${s.status === "fulfilled" ? heroHtml(s.value) : failCard("status", s.reason)}
+    <h2>At a glance</h2>
+    ${st.status === "fulfilled" ? glanceHtml(st.value) : failCard("headline numbers", st.reason)}
+    <h2>Signals · last 90 minutes</h2>
+    ${s.status === "fulfilled" ? signalsHtml(s.value) : failCard("signals", s.reason)}
+    <h2>Recent decisions</h2>
+    ${decisions.status !== "fulfilled" ? failCard("decisions", decisions.reason)
+      : decisions.value.length ? `<div class="list">${decisions.value.map(decisionRow).join("")}</div>`
+      : emptyCard("No decisions yet. All quiet.", "Nothing has needed triage. Detectors fire on errors, latency, fallback answers, empty retrieval and traffic anomalies.")}`;
 }
 
-/* ---------- Incidents + investigation replay ---------- */
+/* ---------- Incidents + investigation trace ---------- */
 let incFilter = "all";
-function stepHtml(c, i) {
-  const res = c.result_preview ? `<pre>${esc(c.result_preview)}</pre>`
-    : c.result_hidden ? `<div class="sub">result not shown in the public view</div>` : "";
-  const label = c.tool === "decide" ? "decide" : c.tool.replaceAll("_", " ");
-  return `<li class="step${c.tool === "decide" ? " decide" : ""}"><span class="n">${i + 1}</span><strong>${esc(label)}</strong>
-    <span class="mono muted">${esc(JSON.stringify(c.args || {}))}</span>${res}</li>`;
+const ACTION_TEXT = {
+  page: "Wake the on-call engineer now.",
+  notify: "Post to the team channel and handle it during working hours.",
+  watch: "No action yet. Re-check if it happens again.",
+  suppress: "No action needed: expected or harmless.",
+};
+const msTxt = (ms) => (ms == null ? "" : ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s");
+const argsLine = (a) => {
+  const e = Object.entries(a || {});
+  return e.length ? e.map(([k, v]) => `${k}=${typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v)}`).join(", ") : "no arguments";
+};
+function traceStep(c) {
+  const args = argsLine(c.args);
+  const result = c.result_summary ? esc(c.result_summary)
+    : c.result_hidden ? '<span class="muted">result recorded (admin only)</span>' : '<span class="muted">no result recorded</span>';
+  return `<li class="tstep"><div class="thead"><strong>${esc(c.tool.replaceAll("_", " "))}</strong><span class="dur">${msTxt(c.duration_ms)}</span></div>
+    <div class="targs mono" title="${esc(args)}">${esc(args)}</div>
+    <div class="tres">→ ${result}</div>
+    ${c.result_preview ? `<details><summary class="sub">raw result</summary><pre>${esc(c.result_preview)}</pre></details>` : ""}</li>`;
 }
-function decisionBlock(d, idx) {
+function traceHtml(d) {
   const calls = d.tool_calls || [];
-  return `<div class="card">
-    <div class="row"><span class="pill ${esc(d.action)}">${esc(d.action)}</span><span class="pill plain">${esc(d.confidence)} confidence</span>
-      <span class="pill plain">${d.degraded ? "rules (AI unavailable)" : "AI agent"}</span><span class="muted">${when(d.ts)}</span></div>
-    <p style="margin:8px 0 0"><strong>${esc(d.summary)}</strong></p>
-    ${d.rationale ? `<p class="sub" style="margin:4px 0 0">${esc(d.rationale)}</p>` : ""}
-    ${d.event?.detail ? `<p class="mono muted" style="margin:6px 0 0">signal: ${esc(d.event.detail)}</p>` : ""}
-    ${calls.length ? `<div class="replay"><div class="row"><button class="btn" data-replay="${idx}">▶ Replay investigation</button>
-      <span class="sub">${calls.length} step${calls.length === 1 ? "" : "s"} · ${d.rounds} round${d.rounds === 1 ? "" : "s"} · ${(d.latency_ms / 1000).toFixed(1)} s</span></div>
-      <ol class="steps" id="steps-${idx}" hidden>${calls.map(stepHtml).join("")}</ol></div>` : ""}
-  </div>`;
+  const tools = calls.filter((c) => c.tool !== "decide");
+  const decide = [...calls].reverse().find((c) => c.tool === "decide");
+  const signal = d.event ? `<li class="tstep signal"><div class="thead"><strong>signal: ${esc(d.event.kind.replaceAll("_", " "))}</strong><span class="dur">${clock(d.ts)}</span></div>
+      ${d.event.detail ? `<div class="tres">${esc(d.event.detail)}</div>` : ""}</li>` : "";
+  const steps = tools.length ? tools.map(traceStep).join("")
+    : `<li class="tstep rules"><div class="thead"><strong>${d.degraded ? "rules baseline" : "no evidence gathered"}</strong></div>
+        <div class="tres">${d.degraded ? "AI triage was unavailable, so no tools ran. The rules decided from the signal's numbers alone." : "The agent decided without calling any tools."}</div></li>`;
+  return `<ol class="trace">${signal}${steps}
+    <li class="tstep final"><div class="thead"><strong>decision</strong><span class="dur">${msTxt(decide?.duration_ms)}</span></div>
+      <dl class="verdict">
+        <dt>Cause</dt><dd><strong>${esc(d.summary)}</strong>${d.rationale ? `<p class="sub">${esc(d.rationale)}</p>` : ""}</dd>
+        <dt>Severity</dt><dd class="row"><span class="pill ${esc(d.action)}">${esc(d.action)}</span><span class="sub">${esc(d.confidence || "")} confidence</span></dd>
+        <dt>Recommended action</dt><dd>${esc(ACTION_TEXT[d.action] || d.action)}</dd>
+      </dl></li></ol>`;
 }
-function replay(idx, btn) {
-  const ol = $("#steps-" + idx);
-  ol.hidden = false;
-  const steps = [...ol.children];
-  btn.disabled = true;
-  if (REDUCED) { btn.textContent = "↺ Replay again"; btn.disabled = false; return; }
-  steps.forEach((s) => s.classList.add("pending"));
-  btn.innerHTML = 'Investigating<span class="thinking"><i></i><i></i><i></i></span>';
-  steps.forEach((s, i) => setTimeout(() => {
-    s.classList.remove("pending");
-    if (i === steps.length - 1) { btn.textContent = "↺ Replay again"; btn.disabled = false; }
-  }, 650 * (i + 1)));
+function runCard(d, i, n) {
+  return `<div class="card run">
+    <div class="row run-head"><strong>${n > 1 ? `Triage run ${i + 1} of ${n}` : "Triage run"}</strong>${pathBadges(d)}
+      <span class="sub">${when(d.ts)} · ${toolCount(d)} tool call${toolCount(d) === 1 ? "" : "s"} · ${(d.latency_ms / 1000).toFixed(1)} s total</span></div>
+    ${traceHtml(d)}</div>`;
+}
+async function renderIncident(el, id) {
+  let i;
+  try {
+    i = await get("/api/incidents/" + encodeURIComponent(id));
+  } catch (e) {
+    const missing = String(e.message).endsWith("404");
+    document.title = "Nightwarden";
+    el.innerHTML = `<p><a href="/incidents">← All incidents</a></p>` + (missing
+      ? emptyCard("Incident not found", "This link doesn't match any incident. It may be mistyped, or the incident was removed.")
+      : failCard("this incident", e));
+    return;
+  }
+  const decisions = i.decisions || [];
+  const latest = decisions[decisions.length - 1];
+  document.title = `${i.severity.toUpperCase()} · ${i.summary} · Nightwarden`;
+  const url = location.origin + "/incidents/" + encodeURIComponent(i.id);
+  el.innerHTML = `<p><a href="/incidents">← All incidents</a></p>
+    <div class="card inc-head">
+      <div class="row"><span class="pill ${esc(i.severity)}">${esc(i.severity)}</span><span class="pill ${esc(i.status)}">${esc(i.status)}</span>
+        ${latest ? pathBadges(latest) : ""}</div>
+      <h1>${esc(i.summary)}</h1>
+      <div class="meta"><span>opened ${when(i.opened_at)}</span><span class="mono">${esc(i.kind)}</span>
+        <span>${i.occurrences} occurrence${i.occurrences === 1 ? "" : "s"}</span>${i.closed_at ? `<span>resolved ${when(i.closed_at)}</span>` : ""}</div>
+      <div class="share"><button class="btn" id="copy">Copy link</button><span class="mono muted" id="link">${esc(url)}</span></div>
+    </div>
+    <h2>Investigation</h2>
+    ${decisions.length ? `<div class="list">${decisions.map((d, k) => runCard(d, k, decisions.length)).join("")}</div>`
+      : emptyCard("No triage runs recorded yet", "This incident has no decisions attached, so there is no trace to show.")}`;
+  $("#copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(url); $("#copy").textContent = "Copied ✓"; }
+    catch { getSelection().selectAllChildren($("#link")); $("#copy").textContent = "Press Ctrl+C to copy"; }
+    setTimeout(() => { const b = $("#copy"); if (b) b.textContent = "Copy link"; }, 2000);
+  };
 }
 async function renderIncidents(openId) {
   const el = $("#incidents");
+  el.innerHTML = '<p class="sub">Loading…</p>';
+  if (openId) return renderIncident(el, openId);
+  document.title = "Incidents · Nightwarden";
   try {
-    if (openId) {
-      const i = await get("/api/incidents/" + encodeURIComponent(openId));
-      el.innerHTML = `<p><a href="#incidents">← All incidents</a></p>
-        <div class="row"><span class="pill ${esc(i.severity)}">${esc(i.severity)}</span><span class="pill ${esc(i.status)}">${esc(i.status)}</span>
-          <span class="mono muted">${esc(i.kind)}</span></div>
-        <h1>${esc(i.summary)}</h1>
-        <p class="sub">Opened ${when(i.opened_at)} · ${i.occurrences} occurrence${i.occurrences === 1 ? "" : "s"}${i.closed_at ? " · resolved " + when(i.closed_at) : ""}</p>
-        <h2>Timeline</h2>
-        <div class="card"><ol class="timeline">
-          <li><span class="mono muted">${when(i.opened_at)}</span> opened</li>
-          ${i.decisions.map((d) => `<li><span class="mono muted">${when(d.ts)}</span><span class="pill ${esc(d.action)}">${esc(d.action)}</span>${esc(d.event?.detail || d.summary)}</li>`).join("")}
-          ${i.closed_at ? `<li><span class="mono muted">${when(i.closed_at)}</span><span class="pill resolved">resolved</span></li>` : ""}
-        </ol></div>
-        <h2>Decisions</h2><div class="list">${i.decisions.map(decisionBlock).join("") || '<p class="empty">No decisions recorded.</p>'}</div>`;
-      el.querySelectorAll("[data-replay]").forEach((b) => (b.onclick = () => replay(b.dataset.replay, b)));
-      return;
-    }
     const list = await get("/api/incidents?limit=100" + (incFilter === "all" ? "" : "&status=" + incFilter));
+    const none = { all: ["No incidents yet. All quiet.", "An incident opens when triage decides a signal needs a page, a notification or watching."],
+      open: ["No open incidents. All quiet.", "Everything that was opened has been resolved."],
+      resolved: ["No resolved incidents yet.", "Incidents resolve themselves after 3 quiet hours, or by hand."] }[incFilter];
     el.innerHTML = `<div class="filters" role="group" aria-label="Filter incidents">
         ${["all", "open", "resolved"].map((f) => `<button class="btn" data-f="${f}" aria-pressed="${incFilter === f}">${f[0].toUpperCase() + f.slice(1)}</button>`).join("")}
-      </div>` + (list.length ? `<div class="list">${list.map((i) => `<a class="row-link" href="#incidents/${esc(i.id)}"><div class="card">
+      </div>` + (list.length ? `<div class="list">${list.map((i) => `<a class="row-link" href="/incidents/${encodeURIComponent(i.id)}"><div class="card">
           <div class="row"><span class="pill ${esc(i.severity)}">${esc(i.severity)}</span><span class="pill ${esc(i.status)}">${esc(i.status)}</span>
           <strong>${esc(i.summary)}</strong></div>
           <div class="sub" style="margin-top:4px">${esc(i.kind.replaceAll("_", " "))} · opened ${ago(i.opened_at)} · ${i.occurrences}×</div></div></a>`).join("")}</div>`
-      : `<p class="empty">No ${incFilter === "all" ? "" : incFilter + " "}incidents. Only notify and page decisions open one.</p>`);
+      : emptyCard(...none));
     el.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { incFilter = b.dataset.f; renderIncidents(); }));
   } catch (e) {
-    el.innerHTML = `<p class="empty">Couldn't load incidents (${esc(e.message)}).</p>`;
+    el.innerHTML = failCard("incidents", e);
   }
 }
 
@@ -274,11 +335,12 @@ function scenarioChart(rows) {
 }
 async function renderEval() {
   const el = $("#eval");
+  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
   try {
     const r = await get("/api/eval");
-    if (!r.available) { el.innerHTML = `<p class="empty">No evaluation results published yet.</p>`; return; }
+    if (!r.available) { el.innerHTML = emptyCard("No evaluation results published yet", "Results appear here after the eval runs (python -m eval.run_eval)."); return; }
     const s = r.summary, b = s.baseline || {}, a = s.agent || {};
-    if (!a.n) { el.innerHTML = `<p class="empty">Only the rules baseline has been scored so far.</p>`; return; }
+    if (!a.n) { el.innerHTML = emptyCard("Only the rules baseline has been scored so far", "The AI agent's numbers appear once an eval run with a model key has finished."); return; }
     const c = s.agent_cost || {};
     el.innerHTML = `
       <h1>Agent vs. a frozen rules baseline</h1>
@@ -314,7 +376,7 @@ async function renderEval() {
       h.addEventListener("pointermove", show); h.addEventListener("pointerleave", hideTip);
     });
   } catch (e) {
-    el.innerHTML = `<p class="empty">Couldn't load evaluation (${esc(e.message)}).</p>`;
+    el.innerHTML = failCard("evaluation", e);
   }
 }
 function scenarioTable(rows) {
@@ -334,14 +396,14 @@ function renderHow() {
   const wire = (d, warn) => `<path class="wire" d="${d}"/><path class="flow${warn ? " warn" : ""}" d="${d}"/>`;
   el.innerHTML = `
     <h1>How Nightwarden works</h1>
-    <p class="sub">A scheduler wakes it every 14 minutes. It reads Citebase's health, decides whether anything looks wrong, and if so an AI agent investigates and decides who needs to know.</p>
+    <p class="sub">A scheduler wakes it every 10 minutes. It reads Citebase's health, decides whether anything looks wrong, and if so an AI agent investigates and decides who needs to know.</p>
     <div class="card" style="margin-top:14px"><div class="scroll">
       <svg class="diagram" viewBox="0 0 1000 410" role="img" aria-label="Pipeline: Citebase metrics and logs, poller, detectors, AI agent with tools, incidents, Discord and dashboard; rules take over if the AI is down">
         ${wire("M190 71 H250")}${wire("M430 71 H490")}${wire("M670 71 H720 Q740 71 740 91 V150")}
         ${wire("M840 212 V250 Q840 270 820 270 H690")}${wire("M500 270 H460")}${wire("M595 302 V330")}
         ${wire("M580 102 V150", true)}${wire("M580 212 V240", true)}
         ${node(20, 40, 170, "Citebase", "metrics + redacted logs")}
-        ${node(250, 40, 180, "Poller", "every 14 min · deltas")}
+        ${node(250, 40, 180, "Poller", "every 10 min · deltas")}
         ${node(490, 40, 180, "Detectors", "errors · fallbacks · latency")}
         ${node(700, 150, 280, "AI agent", "logs · metrics · deploys · history → decide", "ai")}
         ${node(500, 150, 160, "Rules fallback", "if the AI is down: fail loud", "fail")}
@@ -362,17 +424,36 @@ function renderHow() {
     </ol>`;
 }
 
-/* ---------- routing ---------- */
+/* ---------- routing: real paths, so every incident has a shareable link ---------- */
 const TABS = ["live", "incidents", "eval", "how"];
+const TITLES = { live: "Nightwarden", eval: "Evaluation · Nightwarden", how: "How it works · Nightwarden" };
 function route() {
-  const [tab, id] = (location.hash.slice(1) || "live").split("/");
+  if (location.hash.length > 1) {  // old #tab/id links keep working
+    const h = location.hash.slice(1);
+    history.replaceState(null, "", h === "live" ? "/" : "/" + h);
+  }
+  const [tab, id] = location.pathname.replace(/^\/+|\/+$/g, "").split("/");
   const name = TABS.includes(tab) ? tab : "live";
   document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === name));
   document.querySelectorAll("main>section").forEach((s) => (s.hidden = s.id !== name));
   hideTip();
-  ({ live: renderLive, incidents: () => renderIncidents(id), eval: renderEval, how: renderHow })[name]();
+  if (TITLES[name]) document.title = TITLES[name];
+  ({ live: renderLive, incidents: () => renderIncidents(id && decodeURIComponent(id)), eval: renderEval, how: renderHow })[name]();
 }
-document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => { location.hash = b.dataset.tab; }));
-addEventListener("hashchange", route);
+function go(path) {
+  if (path !== location.pathname) history.pushState(null, "", path);
+  route();
+  scrollTo(0, 0);
+}
+document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => go(b.dataset.tab === "live" ? "/" : "/" + b.dataset.tab)));
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.("a[href]");
+  if (!a || a.target || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const u = new URL(a.href, location.href);
+  if (u.origin !== location.origin || /^\/(api|static)\//.test(u.pathname)) return;
+  e.preventDefault();
+  go(u.pathname);
+});
+addEventListener("popstate", route);
 route();
 setInterval(() => { if (!$("#live").hidden && !document.hidden) renderLive(); }, 60000);

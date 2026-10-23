@@ -1,16 +1,20 @@
 """Nightwarden: an AI on-call agent that watches Citebase."""
+import html
 import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
 from app.collector import poller
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.security import RateLimit, SecurityHeaders
+from app.db.models import Incident
+from app.db.session import get_db
 from app.routes import api, health
 
 settings = get_settings()
@@ -37,6 +41,32 @@ app.include_router(api.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _index() -> str:
+    with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
+        return fh.read()
+
+
 @app.get("/", include_in_schema=False)
+@app.get("/live", include_in_schema=False)
+@app.get("/incidents", include_in_schema=False)
+@app.get("/eval", include_in_schema=False)
+@app.get("/how", include_in_schema=False)
 def dashboard():
     return FileResponse(os.path.join(STATIC, "index.html"))
+
+
+@app.get("/incidents/{incident_id}", include_in_schema=False)
+def incident_page(incident_id: str, db: Session = Depends(get_db)):
+    """Shareable incident link: the same page, with the incident's summary as its title for link previews."""
+    page = _index()
+    inc = db.get(Incident, incident_id[:36])
+    if inc is not None:
+        title = html.escape(f"{inc.severity.upper()} · {inc.summary} · Nightwarden", quote=True)
+        page = page.replace("<title>Nightwarden</title>",
+                            f'<title>{title}</title>\n<meta property="og:title" content="{title}">', 1)
+    return HTMLResponse(page, status_code=200 if inc is not None else 404)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(os.path.join(STATIC, "favicon.svg"), media_type="image/svg+xml")
