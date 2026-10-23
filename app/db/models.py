@@ -90,6 +90,7 @@ class Decision(Base):
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider: Mapped[str | None] = mapped_column(String(12), nullable=True)  # groq | gemini | anthropic | rules
     # Evaluation only.
     scenario: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expected_action: Mapped[str | None] = mapped_column(String(10), nullable=True)

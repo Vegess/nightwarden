@@ -1,6 +1,7 @@
 """All settings come from the environment (or .env) through pydantic-settings.
 Nothing else in the code reads os.environ."""
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +28,14 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-120b"
     agent_max_rounds: int = 6
+    orchestrator: Literal["loop", "langgraph"] = "loop"
+
+    # Backup AI provider, tried when Groq is unavailable (Gemini first if both are set),
+    # before falling back to the rules. Decisions it makes are marked degraded.
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-opus-5-5"
 
     # Alerts. Discord or Slack incoming webhook; email through Brevo.
     notify_webhook_url: str | None = None

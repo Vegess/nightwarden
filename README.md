@@ -31,8 +31,13 @@ Citebase /metrics, /metrics/logs
   spikes or drops. Each kind has a 30-minute cooldown.
 - **Agent.** The model investigates with four read-only tools and ends by calling `decide`. The system prompt
   describes the costs of paging versus missing a failure. It contains no "signal X means action Y" rules.
-- **Fail loud.** If the model is unavailable, Nightwarden falls back to the rules and raises the result: silent-
-  failure signals (fallback spike, zero chunks, target down) always page. It never goes quiet because its own AI broke.
+- **Fail loud.** If Groq is unavailable, the same agent runs on a backup provider (Gemini or Anthropic, if a key is
+  set); if that fails too, Nightwarden falls back to the rules and raises the result: silent-failure signals (fallback
+  spike, zero chunks, target down) always page. Anything not decided by Groq is marked degraded, and each decision
+  records its provider (`groq`, `gemini`, `anthropic` or `rules`). It never goes quiet because its own AI broke.
+- **Two orchestrators.** `ORCHESTRATOR=loop` (default) is a plain tool-calling loop; `ORCHESTRATOR=langgraph` runs
+  the same steps as a LangGraph state machine. Both share the tools, prompt, `decide` schema, round limit and
+  per-step trace (see the comparison under Evaluation).
 - **Incidents.** Repeats of the same kind within 6 hours merge into one incident; alerts go out only when an incident
   opens or gets more severe. Incidents resolve themselves after 3 quiet hours.
 - **Watching the watcher.** Every poll pings a healthchecks.io dead-man switch; if polls stop, it emails.
@@ -103,6 +108,32 @@ called normal latency "high" on quiet controls because it had nothing to compare
 this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
 the model judges a value against the service's own normal. Labels and the baseline were not touched.
 
+**Loop vs LangGraph** (held-out variations 1–4, `openai/gpt-oss-120b`, one run each on 23 Oct 2026; latency
+includes free-tier rate-limit waits). **Incomplete:** the LangGraph run hit Groq's free daily token cap (200k
+tokens/day) after 5 of 48 cases, so only the paired row compares like with like. To finish it, re-run the *Agent eval*
+workflow with `orchestrators: langgraph`, `label: orch-compare` and *resume* ticked once the cap resets.
+
+| # | Scenario | n | Loop accuracy | LangGraph accuracy | Loop latency | LangGraph latency | Loop tool calls | LangGraph tool calls |
+|---|---|---|---|---|---|---|---|---|
+| 1 | invalid_api_key | 4 | 4/4 (100%) | 4/4 (100%) | 16.4 s | 19.6 s | 3.5 | 3.5 |
+| 2 | model_decommissioned | 4 | 4/4 (100%) | 1/1 (100%) | 18.4 s | 20.9 s | 2.2 | 3.0 |
+| 3 | llm_timeout | 4 | 2/4 (50%) | not run | 29.2 s | — | 4.5 | — |
+| 4 | vector_store_emptied | 4 | 3/4 (75%) | not run | 17.9 s | — | 3.8 | — |
+| 5 | migration_missing | 4 | 4/4 (100%) | not run | 11.8 s | — | 2.0 | — |
+| 6 | wrong_api_base | 4 | 1/4 (25%) | not run | 26.4 s | — | 4.5 | — |
+| 7 | silent_fallback | 4 | 0/4 (0%) | not run | 19.1 s | — | 4.0 | — |
+| 8 | rate_limiter_storm | 4 | 1/4 (25%) | not run | 25.4 s | — | 4.0 | — |
+| 9 | traffic_spike_clean | 4 | 0/4 (0%) | not run | 14.8 s | — | 3.5 | — |
+| 10 | transient_500_once | 4 | 0/4 (0%) | not run | 9.3 s | — | 2.2 | — |
+| 11 | transient_500_repeat | 4 | 1/4 (25%) | not run | 20.7 s | — | 3.8 | — |
+| 12 | normal_traffic_control | 4 | 1/4 (25%) | not run | 10.4 s | — | 2.5 | — |
+|  | **Total** | 48 | 21/48 (44%) | 5/5 (100%) | 18.3 s | 19.9 s | 3.4 | 3.4 |
+|  | Paired (cases both ran) | 5 | 5/5 (100%) | 5/5 (100%) | 19.8 s | 19.9 s | 3.4 | 3.4 |
+
+Accuracy is over the cases that ran. The loop's 43.8% on this run is below the 60.4% of the 11–12 Oct run on the same
+cases (same model and prompt): run-to-run variance on 48 cases is large, so compare the two orchestrators only within
+one run. Results: `eval/results-loop.json`, `eval/results-langgraph.json`; `python -m eval.compare` prints this table.
+
 Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
 approximate Citebase's real logs but aren't real incidents.
 
@@ -121,6 +152,9 @@ pytest -q                          # no network, no key needed
 python -m eval.run_eval            # baseline only
 python -m eval.run_eval --agent    # agent + baseline (uses Groq quota)
 python -m eval.report              # comparison tables
+python -m eval.run_eval --agent --from-rep 1 --orchestrator loop --out eval/results-loop.json
+python -m eval.run_eval --agent --from-rep 1 --orchestrator langgraph --out eval/results-langgraph.json
+python -m eval.compare             # loop vs LangGraph table
 ```
 
 Deploying (Vercel + Neon + an external scheduler) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
@@ -135,5 +169,5 @@ end), `POST /api/incidents/{id}/resolve`.
 
 ## Stack
 
-FastAPI · SQLAlchemy 2 + Alembic · Postgres (Neon) or SQLite · Groq tool calling (`openai/gpt-oss-120b`) ·
-httpx · vanilla JS dashboard · pytest · Docker.
+FastAPI · SQLAlchemy 2 + Alembic · Postgres (Neon) or SQLite · Groq tool calling (`openai/gpt-oss-120b`), Gemini or
+Claude as backup · LangGraph (optional orchestrator) · httpx · vanilla JS dashboard · pytest · Docker.

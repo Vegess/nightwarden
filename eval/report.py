@@ -1,5 +1,6 @@
-"""Print the agent-vs-baseline comparison from eval/results.json.
+"""Print the agent-vs-baseline comparison from eval/results.json (or --file).
 Numbers are reported as measured: no rounding in anyone's favour."""
+import argparse
 import json
 import statistics
 from collections import Counter
@@ -61,7 +62,9 @@ def _pct(v):
 
 
 def main() -> None:
-    data = json.loads(Path(OUT).read_text())
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--file", type=Path, default=OUT)
+    data = json.loads(ap.parse_args().file.read_text())
     s = summarize(data)
     b, a = s["baseline"], s.get("agent") or {}
     print(f"Model: {data.get('model') or '(baseline only)'} · generated {data['generated_at']} · "
