@@ -21,7 +21,7 @@ jobs:
         env:
           DATABASE_URL: sqlite:///./ci.db
       - name: Baseline eval still reproduces
-        run: python -m eval.run_eval && python -m eval.report
+        run: python -m eval.run_eval && python -m eval.report --file eval/results-baseline.json
 
   docker:
     runs-on: ubuntu-latest

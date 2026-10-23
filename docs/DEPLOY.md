@@ -26,6 +26,7 @@ idle minutes), and leaves both Neon databases idle often enough to stay inside t
    | `TARGET_URL` | `https://documind-intel.onrender.com` |
    | `TARGET_METRICS_TOKEN` | the same `METRICS_TOKEN` as on Citebase's Render service |
    | `GROQ_API_KEY` | a Groq key (a separate one from Citebase's is better) |
+   | `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` | optional backup AI, used when Groq is down or rate-limited |
    | `ADMIN_TOKEN` | a long random string |
    | `CRON_SECRET` | another long random string |
    | `DOWN_AFTER_POLLS` | `2` (two missed polls ≈ 20 min, then target_down) |

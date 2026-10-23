@@ -31,8 +31,13 @@ Citebase /metrics, /metrics/logs
   spikes or drops. Each kind has a 30-minute cooldown.
 - **Agent.** The model investigates with four read-only tools and ends by calling `decide`. The system prompt
   describes the costs of paging versus missing a failure. It contains no "signal X means action Y" rules.
-- **Fail loud.** If the model is unavailable, Nightwarden falls back to the rules and raises the result: silent-
-  failure signals (fallback spike, zero chunks, target down) always page. It never goes quiet because its own AI broke.
+- **Fail loud.** If Groq is unavailable, the same agent runs on a backup provider (Gemini or Anthropic, if a key is
+  set); if that fails too, Nightwarden falls back to the rules and raises the result: silent-failure signals (fallback
+  spike, zero chunks, target down) always page. Anything not decided by Groq is marked degraded, and each decision
+  records its provider (`groq`, `gemini`, `anthropic` or `rules`). It never goes quiet because its own AI broke.
+- **Two orchestrators.** `ORCHESTRATOR=loop` (default) is a plain tool-calling loop; `ORCHESTRATOR=langgraph` runs
+  the same steps as a LangGraph state machine. Both share the tools, prompt, `decide` schema, round limit and
+  per-step trace (see the comparison under Evaluation).
 - **Incidents.** Repeats of the same kind within 6 hours merge into one incident; alerts go out only when an incident
   opens or gets more severe. Incidents resolve themselves after 3 quiet hours.
 - **Watching the watcher.** Every poll pings a healthchecks.io dead-man switch; if polls stop, it emails.
@@ -121,6 +126,9 @@ pytest -q                          # no network, no key needed
 python -m eval.run_eval            # baseline only
 python -m eval.run_eval --agent    # agent + baseline (uses Groq quota)
 python -m eval.report              # comparison tables
+python -m eval.run_eval --agent --from-rep 1 --orchestrator loop --out eval/results-loop.json
+python -m eval.run_eval --agent --from-rep 1 --orchestrator langgraph --out eval/results-langgraph.json
+python -m eval.compare             # loop vs LangGraph table
 ```
 
 Deploying (Vercel + Neon + an external scheduler) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
@@ -135,5 +143,5 @@ end), `POST /api/incidents/{id}/resolve`.
 
 ## Stack
 
-FastAPI · SQLAlchemy 2 + Alembic · Postgres (Neon) or SQLite · Groq tool calling (`openai/gpt-oss-120b`) ·
-httpx · vanilla JS dashboard · pytest · Docker.
+FastAPI · SQLAlchemy 2 + Alembic · Postgres (Neon) or SQLite · Groq tool calling (`openai/gpt-oss-120b`), Gemini or
+Claude as backup · LangGraph (optional orchestrator) · httpx · vanilla JS dashboard · pytest · Docker.
