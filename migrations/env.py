@@ -1,16 +1,22 @@
+import logging
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
+from app.core.logging import RedactFilter, redact_url
 from app.db.base import Base
 import app.db.models  # noqa: F401 — register tables
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(RedactFilter())
+_url = get_settings().database_url
+# ConfigParser treats % as interpolation; escape it so URL-encoded passwords survive.
+config.set_main_option("sqlalchemy.url", _url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 
@@ -30,7 +36,10 @@ def run_migrations_online():
             context.run_migrations()
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+try:
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        run_migrations_online()
+except Exception as exc:  # noqa: BLE001 — driver errors can quote the URL; never print the password
+    raise RuntimeError(f"Migration failed on {redact_url(_url)}: {redact_url(exc)}") from None

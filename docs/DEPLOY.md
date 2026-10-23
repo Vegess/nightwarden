@@ -1,10 +1,10 @@
 # Deploying Nightwarden
 
 Free setup: **Vercel** (Hobby) runs the app, **Neon** stores its data, **cron-job.org** triggers a poll every
-14 minutes, and **healthchecks.io** emails you if polling ever stops.
+10 minutes, and **healthchecks.io** emails you if polling ever stops.
 
 Why this shape: Vercel's free plan has no always-on process and its own cron runs only once a day, so an external
-scheduler calls `/api/cron/poll`. Every 14 minutes keeps Citebase's free Render service awake (it sleeps after 15
+scheduler calls `/api/cron/poll`. Every 10 minutes keeps Citebase's free Render service awake (it sleeps after 15
 idle minutes), and leaves both Neon databases idle often enough to stay inside the free 100 compute-hours a month
 (Neon sleeps after 5 idle minutes).
 
@@ -28,7 +28,7 @@ idle minutes), and leaves both Neon databases idle often enough to stay inside t
    | `GROQ_API_KEY` | a Groq key (a separate one from Citebase's is better) |
    | `ADMIN_TOKEN` | a long random string |
    | `CRON_SECRET` | another long random string |
-   | `DOWN_AFTER_POLLS` | `2` (two missed polls ≈ 28 min, then target_down) |
+   | `DOWN_AFTER_POLLS` | `2` (two missed polls ≈ 20 min, then target_down) |
    | `POLL_TIMEOUT_S` | `20` (answer the scheduler within its 30 s limit even when Citebase is down) |
    | `NOTIFY_WEBHOOK_URL` | Discord channel → Edit → Integrations → Webhooks → copy URL |
    | `HEARTBEAT_URL` | from step 4 |
@@ -41,8 +41,8 @@ idle minutes), and leaves both Neon databases idle often enough to stay inside t
 ## 3. Scheduler (cron-job.org)
 
 1. cron-job.org → sign up (free) → **Create cronjob**.
-2. URL `https://<project>.vercel.app/api/cron/poll`, schedule **every 14 minutes** (custom: minutes
-   `*/14`).
+2. URL `https://<project>.vercel.app/api/cron/poll`, schedule **every 10 minutes** (custom: minutes
+   `*/10`).
 3. **Advanced** → Request method `POST`, add header `Authorization` = `Bearer <CRON_SECRET>`. cron-job.org
    waits 30 s. A normal poll takes a few seconds; one that triages an event can take longer and shows as a
    timeout there. That's fine: the poll is already saved, and if a triage is cut off it runs on the next
@@ -55,6 +55,16 @@ New check → period **15 minutes**, grace **20 minutes**. Its ping URL is `HEAR
 pings it; if polls stop, it emails you.
 
 ## 5. Check alerts end to end
+
+From Windows PowerShell, `scripts/test_alert.ps1` fires a test `error_spike` event:
+
+```powershell
+$env:ADMIN_TOKEN = "<ADMIN_TOKEN>"
+./scripts/test_alert.ps1 -BaseUrl https://<project>.vercel.app
+```
+
+It prints the created event and incident. Check that the Discord message and (if Brevo is set) the email arrive.
+The same request with curl:
 
 ```bash
 curl -X POST https://<project>.vercel.app/api/events \
