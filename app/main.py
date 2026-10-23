@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.collector import poller
 from app.core.config import get_settings
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, redact_url
 from app.core.security import RateLimit, SecurityHeaders
 from app.db.models import Incident
 from app.db.session import get_db
@@ -25,6 +25,7 @@ STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Database: %s", redact_url(settings.database_url))
     stop = poller.start() if settings.poller_enabled and not settings.vercel else None
     if not settings.groq_api_key:
         logger.warning("GROQ_API_KEY not set: triage runs in degraded (rules-only) mode")
