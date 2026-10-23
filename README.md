@@ -108,6 +108,32 @@ called normal latency "high" on quiet controls because it had nothing to compare
 this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
 the model judges a value against the service's own normal. Labels and the baseline were not touched.
 
+**Loop vs LangGraph** (held-out variations 1–4, `openai/gpt-oss-120b`, one run each on 23 Oct 2026; latency
+includes free-tier rate-limit waits). **Incomplete:** the LangGraph run hit Groq's free daily token cap (200k
+tokens/day) after 5 of 48 cases, so only the paired row compares like with like. To finish it, re-run the *Agent eval*
+workflow with `orchestrators: langgraph`, `label: orch-compare` and *resume* ticked once the cap resets.
+
+| # | Scenario | n | Loop accuracy | LangGraph accuracy | Loop latency | LangGraph latency | Loop tool calls | LangGraph tool calls |
+|---|---|---|---|---|---|---|---|---|
+| 1 | invalid_api_key | 4 | 4/4 (100%) | 4/4 (100%) | 16.4 s | 19.6 s | 3.5 | 3.5 |
+| 2 | model_decommissioned | 4 | 4/4 (100%) | 1/1 (100%) | 18.4 s | 20.9 s | 2.2 | 3.0 |
+| 3 | llm_timeout | 4 | 2/4 (50%) | not run | 29.2 s | — | 4.5 | — |
+| 4 | vector_store_emptied | 4 | 3/4 (75%) | not run | 17.9 s | — | 3.8 | — |
+| 5 | migration_missing | 4 | 4/4 (100%) | not run | 11.8 s | — | 2.0 | — |
+| 6 | wrong_api_base | 4 | 1/4 (25%) | not run | 26.4 s | — | 4.5 | — |
+| 7 | silent_fallback | 4 | 0/4 (0%) | not run | 19.1 s | — | 4.0 | — |
+| 8 | rate_limiter_storm | 4 | 1/4 (25%) | not run | 25.4 s | — | 4.0 | — |
+| 9 | traffic_spike_clean | 4 | 0/4 (0%) | not run | 14.8 s | — | 3.5 | — |
+| 10 | transient_500_once | 4 | 0/4 (0%) | not run | 9.3 s | — | 2.2 | — |
+| 11 | transient_500_repeat | 4 | 1/4 (25%) | not run | 20.7 s | — | 3.8 | — |
+| 12 | normal_traffic_control | 4 | 1/4 (25%) | not run | 10.4 s | — | 2.5 | — |
+|  | **Total** | 48 | 21/48 (44%) | 5/5 (100%) | 18.3 s | 19.9 s | 3.4 | 3.4 |
+|  | Paired (cases both ran) | 5 | 5/5 (100%) | 5/5 (100%) | 19.8 s | 19.9 s | 3.4 | 3.4 |
+
+Accuracy is over the cases that ran. The loop's 43.8% on this run is below the 60.4% of the 11–12 Oct run on the same
+cases (same model and prompt): run-to-run variance on 48 cases is large, so compare the two orchestrators only within
+one run. Results: `eval/results-loop.json`, `eval/results-langgraph.json`; `python -m eval.compare` prints this table.
+
 Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
 approximate Citebase's real logs but aren't real incidents.
 
