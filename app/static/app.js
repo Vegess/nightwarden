@@ -141,6 +141,7 @@ function heroHtml(s) {
           <span>watching ${esc(s.target_host || s.service)}</span>
           <span>last poll ${ago(s.last_poll)}</span>
           <span>AI triage: ${esc(s.ai_triage)}${s.last_triage_degraded ? " (last decision used rules)" : ""}</span>
+          ${s.email_alerts === "off" ? `<span class="warn">email alerts: off</span>` : ""}
           ${s.commit ? `<span class="mono">commit ${esc(String(s.commit).slice(0, 7))}</span>` : ""}
         </div>
       </div>

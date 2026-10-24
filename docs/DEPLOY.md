@@ -63,7 +63,9 @@ $env:ADMIN_TOKEN = "<ADMIN_TOKEN>"
 ./scripts/test_alert.ps1 -BaseUrl https://<project>.vercel.app
 ```
 
-It prints the created event and incident. Check that the Discord message and (if Brevo is set) the email arrive.
+It prints the decision and incident. Check that the Discord message and (if Brevo is set) the email arrive.
+`-Delivery` skips triage: it calls `POST /api/alerts/test`, sends one test page, and prints
+`Discord: sent/failed  Email: sent/failed/not configured`.
 The same request with curl:
 
 ```bash

@@ -160,3 +160,41 @@ def test_summarize_result_counts_never_quotes_content():
     assert summarize_result("get_metrics", {"metric": "error_rate", "points": []}) == "no error_rate data"
     assert summarize_result("get_deploy_history", {"deploys": []}) == "no recent deploys"
     assert summarize_result("search_past_incidents", {"incidents": [{}, {}]}) == "2 past incidents"
+
+
+class _ProviderError(Exception):
+    def __init__(self, status, msg):
+        super().__init__(msg)
+        self.status_code = status
+
+
+def test_provider_errors_are_shortened_before_rationale_and_alerts(scripted):
+    from app.agent.orchestrator import short_error
+    tpd = _ProviderError(429, "Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-120b` "
+                              "in organization `org_01kz912k7peb799rdnvmqynejc` service tier `on_demand` on tokens per day "
+                              "(TPD): Limit 200000, Used 198494, Requested 1666. Please try again in 7m12.5s.'}}")
+    assert short_error(tpd) == "Groq rate limit (429, tokens per day)"
+    assert short_error(_ProviderError(401, "Invalid API Key")) == "Groq auth error (401)"
+    assert short_error(_ProviderError(400, "{'error': {'code': 'tool_use_failed', 'failed_generation': 'secret'}}")) \
+        == "Groq rejected the request (400, tool_use_failed)"
+    assert short_error(_ProviderError(503, "upstream")) == "Groq error (503)"
+    assert short_error(TimeoutError("read timed out")) == "Groq timed out"
+
+    event, evidence = build(1, 0)
+    with pytest.raises(AgentUnavailable) as e:
+        triage(event, evidence, client=scripted([tpd]), max_rounds=6)
+    assert str(e.value) == "Groq rate limit (429, tokens per day)"
+
+
+def test_shortened_error_is_what_the_rationale_and_alert_carry(db, scripted, quiet_alerts):
+    import json
+    from app.db.models import Event
+    from app.services import triage as triage_service
+    triage_service._last_degraded_notice = None
+    ev = Event(service="citebase", kind="error_spike", detail="x", metrics=json.dumps({"error_rate": 0.5}), source="manual")
+    db.add(ev)
+    db.commit()
+    tpd = _ProviderError(429, "Rate limit reached in organization `org_01kz912k7peb799rdnvmqynejc` on tokens per day (TPD). Please try again in 7m12.5s.")
+    d = triage_service.run(db, ev, build(1, 0)[1], client=scripted([tpd]))
+    assert "Groq rate limit (429, tokens per day)" in d.rationale and "org_" not in d.rationale
+    assert d.degraded and d.triager == "degraded"

@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     stop = poller.start() if settings.poller_enabled and not settings.vercel else None
     if not settings.groq_api_key:
         logger.warning("GROQ_API_KEY not set: triage runs in degraded (rules-only) mode")
+    missing = [k for k, v in (("BREVO_API_KEY", settings.brevo_api_key), ("ALERT_EMAIL", settings.alert_email)) if not v]
+    if missing:
+        logger.warning("Email alerts are off: %s not set; pages go to the webhook only", " and ".join(missing))
     yield
     if stop:
         stop.set()

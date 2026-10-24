@@ -1,0 +1,547 @@
+{
+ "generated_at": "2026-10-23T17:06:08.971105+00:00",
+ "model": null,
+ "orchestrator": null,
+ "cases": [
+  {
+   "scenario": 1,
+   "rep": 0,
+   "name": "invalid_api_key",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 1,
+   "rep": 1,
+   "name": "invalid_api_key",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 1,
+   "rep": 2,
+   "name": "invalid_api_key",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 1,
+   "rep": 3,
+   "name": "invalid_api_key",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 1,
+   "rep": 4,
+   "name": "invalid_api_key",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 2,
+   "rep": 0,
+   "name": "model_decommissioned",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 2,
+   "rep": 1,
+   "name": "model_decommissioned",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 2,
+   "rep": 2,
+   "name": "model_decommissioned",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 2,
+   "rep": 3,
+   "name": "model_decommissioned",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 2,
+   "rep": 4,
+   "name": "model_decommissioned",
+   "silent": false,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 3,
+   "rep": 0,
+   "name": "llm_timeout",
+   "silent": false,
+   "kind": "latency_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 3,
+   "rep": 1,
+   "name": "llm_timeout",
+   "silent": false,
+   "kind": "latency_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 3,
+   "rep": 2,
+   "name": "llm_timeout",
+   "silent": false,
+   "kind": "latency_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 3,
+   "rep": 3,
+   "name": "llm_timeout",
+   "silent": false,
+   "kind": "latency_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 3,
+   "rep": 4,
+   "name": "llm_timeout",
+   "silent": false,
+   "kind": "latency_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 4,
+   "rep": 0,
+   "name": "vector_store_emptied",
+   "silent": true,
+   "kind": "zero_chunks",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 4,
+   "rep": 1,
+   "name": "vector_store_emptied",
+   "silent": true,
+   "kind": "zero_chunks",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 4,
+   "rep": 2,
+   "name": "vector_store_emptied",
+   "silent": true,
+   "kind": "zero_chunks",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 4,
+   "rep": 3,
+   "name": "vector_store_emptied",
+   "silent": true,
+   "kind": "zero_chunks",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 4,
+   "rep": 4,
+   "name": "vector_store_emptied",
+   "silent": true,
+   "kind": "zero_chunks",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 5,
+   "rep": 0,
+   "name": "migration_missing",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "page",
+   "baseline": "page"
+  },
+  {
+   "scenario": 5,
+   "rep": 1,
+   "name": "migration_missing",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "page",
+   "baseline": "page"
+  },
+  {
+   "scenario": 5,
+   "rep": 2,
+   "name": "migration_missing",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "page",
+   "baseline": "page"
+  },
+  {
+   "scenario": 5,
+   "rep": 3,
+   "name": "migration_missing",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "page",
+   "baseline": "page"
+  },
+  {
+   "scenario": 5,
+   "rep": 4,
+   "name": "migration_missing",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "page",
+   "baseline": "page"
+  },
+  {
+   "scenario": 6,
+   "rep": 0,
+   "name": "wrong_api_base",
+   "silent": true,
+   "kind": "traffic_drop",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 6,
+   "rep": 1,
+   "name": "wrong_api_base",
+   "silent": true,
+   "kind": "traffic_drop",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 6,
+   "rep": 2,
+   "name": "wrong_api_base",
+   "silent": true,
+   "kind": "traffic_drop",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 6,
+   "rep": 3,
+   "name": "wrong_api_base",
+   "silent": true,
+   "kind": "traffic_drop",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 6,
+   "rep": 4,
+   "name": "wrong_api_base",
+   "silent": true,
+   "kind": "traffic_drop",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 7,
+   "rep": 0,
+   "name": "silent_fallback",
+   "silent": true,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 7,
+   "rep": 1,
+   "name": "silent_fallback",
+   "silent": true,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 7,
+   "rep": 2,
+   "name": "silent_fallback",
+   "silent": true,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 7,
+   "rep": 3,
+   "name": "silent_fallback",
+   "silent": true,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 7,
+   "rep": 4,
+   "name": "silent_fallback",
+   "silent": true,
+   "kind": "fallback_spike",
+   "expected": "page",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 8,
+   "rep": 0,
+   "name": "rate_limiter_storm",
+   "silent": false,
+   "kind": "status_storm",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 8,
+   "rep": 1,
+   "name": "rate_limiter_storm",
+   "silent": false,
+   "kind": "status_storm",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 8,
+   "rep": 2,
+   "name": "rate_limiter_storm",
+   "silent": false,
+   "kind": "status_storm",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 8,
+   "rep": 3,
+   "name": "rate_limiter_storm",
+   "silent": false,
+   "kind": "status_storm",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 8,
+   "rep": 4,
+   "name": "rate_limiter_storm",
+   "silent": false,
+   "kind": "status_storm",
+   "expected": "notify",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 9,
+   "rep": 0,
+   "name": "traffic_spike_clean",
+   "silent": false,
+   "kind": "traffic_spike",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 9,
+   "rep": 1,
+   "name": "traffic_spike_clean",
+   "silent": false,
+   "kind": "traffic_spike",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 9,
+   "rep": 2,
+   "name": "traffic_spike_clean",
+   "silent": false,
+   "kind": "traffic_spike",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 9,
+   "rep": 3,
+   "name": "traffic_spike_clean",
+   "silent": false,
+   "kind": "traffic_spike",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 9,
+   "rep": 4,
+   "name": "traffic_spike_clean",
+   "silent": false,
+   "kind": "traffic_spike",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 10,
+   "rep": 0,
+   "name": "transient_500_once",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "suppress",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 10,
+   "rep": 1,
+   "name": "transient_500_once",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "suppress",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 10,
+   "rep": 2,
+   "name": "transient_500_once",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "suppress",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 10,
+   "rep": 3,
+   "name": "transient_500_once",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "suppress",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 10,
+   "rep": 4,
+   "name": "transient_500_once",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "suppress",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 11,
+   "rep": 0,
+   "name": "transient_500_repeat",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 11,
+   "rep": 1,
+   "name": "transient_500_repeat",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 11,
+   "rep": 2,
+   "name": "transient_500_repeat",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 11,
+   "rep": 3,
+   "name": "transient_500_repeat",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 11,
+   "rep": 4,
+   "name": "transient_500_repeat",
+   "silent": false,
+   "kind": "error_spike",
+   "expected": "notify",
+   "baseline": "notify"
+  },
+  {
+   "scenario": 12,
+   "rep": 0,
+   "name": "normal_traffic_control",
+   "silent": false,
+   "kind": "routine_check",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 12,
+   "rep": 1,
+   "name": "normal_traffic_control",
+   "silent": false,
+   "kind": "routine_check",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 12,
+   "rep": 2,
+   "name": "normal_traffic_control",
+   "silent": false,
+   "kind": "routine_check",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 12,
+   "rep": 3,
+   "name": "normal_traffic_control",
+   "silent": false,
+   "kind": "routine_check",
+   "expected": "suppress",
+   "baseline": "suppress"
+  },
+  {
+   "scenario": 12,
+   "rep": 4,
+   "name": "normal_traffic_control",
+   "silent": false,
+   "kind": "routine_check",
+   "expected": "suppress",
+   "baseline": "suppress"
+  }
+ ]
+}

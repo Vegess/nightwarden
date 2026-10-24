@@ -184,3 +184,45 @@ def test_alert_links_point_at_the_incident_page():
     import inspect
     from app.services import triage
     assert '/incidents/{incident.id}' in inspect.getsource(triage) and "#incidents" not in inspect.getsource(triage)
+
+
+def test_alert_delivery_endpoint_is_admin_only_and_skips_triage(db, monkeypatch, quiet_alerts):
+    from app.db.models import Decision, Event
+    from app.services import notify
+    c = client(db, monkeypatch)
+    assert c.post("/api/alerts/test").status_code == 401
+    assert c.post("/api/alerts/test", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    monkeypatch.setattr(notify, "alert", lambda level, title, body, link=None:
+                        quiet_alerts.append((level, title, body, link)) or {"webhook": True, "email": False})
+    monkeypatch.setattr(notify.settings, "public_url", "https://nw.example/")
+    r = c.post("/api/alerts/test", headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    assert r.json() == {"webhook": True, "email": False, "email_configured": False}
+    assert quiet_alerts == [("page", "Test alert", "Delivery test from /api/alerts/test", "https://nw.example/")]
+    assert db.query(Event).count() == 0 and db.query(Decision).count() == 0  # no triage
+
+
+def test_alert_delivery_endpoint_is_rate_limited_like_other_writes(db, monkeypatch):
+    c = client(db, monkeypatch)
+    codes = [c.post("/api/alerts/test").status_code for _ in range(11)]
+    assert codes[:10] == [401] * 10 and codes[10] == 429
+
+
+def test_missing_email_config_is_loud(db, monkeypatch, caplog):
+    import logging
+    from app.main import app, lifespan
+    from app.services import notify
+    c = client(db, monkeypatch)
+    monkeypatch.setattr(notify.settings, "brevo_api_key", "k")
+    monkeypatch.setattr(notify.settings, "alert_email", None)
+    assert c.get("/api/status").json()["email_alerts"] == "off"
+    with caplog.at_level(logging.WARNING, logger="nightwarden"):
+        import asyncio
+
+        async def boot():
+            async with lifespan(app):
+                pass
+        asyncio.run(boot())
+    assert any("Email alerts are off: ALERT_EMAIL not set" in r.getMessage() for r in caplog.records)
+    monkeypatch.setattr(notify.settings, "alert_email", "me@example.com")
+    assert c.get("/api/status").json()["email_alerts"] == "on"

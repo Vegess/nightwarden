@@ -21,7 +21,7 @@ from app.collector import poller
 from app.core.config import get_settings
 from app.db.models import Decision, Deploy, Event, Incident, Snapshot
 from app.db.session import get_db
-from app.services import triage
+from app.services import notify, triage
 
 router = APIRouter(prefix="/api")
 settings = get_settings()
@@ -110,6 +110,7 @@ def status(db: Session = Depends(get_db)):
         "poller": poller.state(),
         "ai_triage": "ready" if settings.groq_api_key else "off (no key): rules only",
         "last_triage_degraded": bool(last_decision and last_decision.degraded),
+        "email_alerts": "on" if notify.email_configured() else "off",
         "window": json.loads(last_ok.derived).get("window") if last_ok else None,
         "commit": raw.get("commit"), "llm_model": raw.get("llm_model"),
         "uptime_s": raw.get("uptime_s"),
@@ -235,6 +236,14 @@ def manual_event(body: EventIn, db: Session = Depends(get_db)):
     db.commit()
     d = triage.run(db, event, LiveEvidence(db, settings.target_name, fetch_logs=poller._safe_fetch_logs))
     return _decision_out(d, event, full=True)
+
+
+@router.post("/alerts/test", dependencies=[Depends(require_admin)])
+def test_alert():
+    """Check alert delivery without triage: sends one page through every configured sink."""
+    sent = notify.alert("page", "Test alert", "Delivery test from /api/alerts/test",
+                        link=settings.public_url.rstrip("/") + "/")
+    return {"webhook": sent["webhook"], "email": sent["email"], "email_configured": notify.email_configured()}
 
 
 @router.post("/incidents/{incident_id}/resolve", dependencies=[Depends(require_admin)])
