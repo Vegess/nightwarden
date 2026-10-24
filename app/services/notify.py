@@ -44,8 +44,12 @@ def _webhook(text: str, level: str = "info", title: str = "", body_text: str = "
         return False
 
 
+def email_configured() -> bool:
+    return bool(settings.brevo_api_key and settings.alert_email)
+
+
 def _email(subject: str, text: str) -> bool:
-    if not (settings.brevo_api_key and settings.alert_email):
+    if not email_configured():
         return False
     name, address = parseaddr(settings.mail_from)
     try:

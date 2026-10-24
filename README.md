@@ -131,7 +131,7 @@ decisions are in [docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
 Public, read-only: `GET /health`, `/api/status`, `/api/incidents`, `/api/incidents/{id}`, `/api/decisions`,
 `/api/eval`.
 Admin (`Authorization: Bearer $ADMIN_TOKEN`): `POST /api/deploys`, `POST /api/events` (fire a test event end to
-end), `POST /api/incidents/{id}/resolve`.
+end), `POST /api/alerts/test` (send one test page, no triage), `POST /api/incidents/{id}/resolve`.
 
 ## Stack
 

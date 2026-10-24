@@ -83,6 +83,33 @@ def rate_limit_delay(exc: Exception) -> float | None:
     return 10.0
 
 
+_LIMIT_KINDS = {"TPD": "tokens per day", "RPD": "requests per day", "TPM": "tokens per minute",
+                "RPM": "requests per minute"}
+
+
+def short_error(exc: Exception, provider: str = "Groq") -> str:
+    """A provider failure in a few words, for rationales and alerts. Raw messages carry org ids,
+    request ids and quoted generations, and belong in the logs, not in what people read."""
+    status = getattr(exc, "status_code", None)
+    text = str(exc)
+    if status == 429:
+        kind = next((v for k, v in _LIMIT_KINDS.items() if f"({k})" in text or v in text), None)
+        return f"{provider} rate limit (429{', ' + kind if kind else ''})"
+    if status in (401, 403):
+        return f"{provider} auth error ({status})"
+    if status == 400:
+        code = re.search(r"'code': '([a-z_]+)'", text)
+        return f"{provider} rejected the request (400{', ' + code.group(1) if code else ''})"
+    if status:
+        return f"{provider} error ({status})"
+    name = type(exc).__name__
+    if "Timeout" in name:
+        return f"{provider} timed out"
+    if "Connection" in name:
+        return f"{provider} unreachable ({name})"
+    return f"{provider} call failed ({name})"
+
+
 def _valid_decision(args: dict) -> str | None:
     if args.get("action") not in ACTIONS:
         return f"action must be one of {', '.join(ACTIONS)}"
@@ -135,7 +162,7 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
                 failures += 1
                 logger.warning("Triage model call failed (round %s): %s", round_i + 1, str(exc)[:300])
                 if failures >= 2 or last or delay is not None:
-                    raise AgentUnavailable(f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+                    raise AgentUnavailable(short_error(exc)) from exc
                 break
         if resp is None:
             continue
