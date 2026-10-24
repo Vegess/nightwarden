@@ -169,6 +169,30 @@ footer { color: var(--muted); font-size: 12px; text-align: center; padding: 28px
 footer .links { justify-content: center; }
 footer p { margin: 10px 0 0; }
 
+/* health checks & usage meters */
+.pill.pass::before { background: var(--good); }
+.pill.warn::before { background: var(--warning); }
+.pill.fail::before { background: var(--critical); }
+.overall { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.overall.warn { border-color: color-mix(in srgb, var(--warning) 45%, transparent); }
+.overall.fail { border-color: color-mix(in srgb, var(--critical) 55%, transparent); }
+.checks { gap: 8px; }
+.check { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: start; padding: 12px 16px; }
+.check .pill { justify-self: start; margin-top: 1px; }
+.check-body { min-width: 0; overflow-wrap: anywhere; }
+.meter { padding: 6px 0 10px; }
+.meter + .meter, .card > p + .meter { border-top: 1px solid var(--rule); padding-top: 12px; }
+.meter-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; margin-bottom: 6px; }
+.meter-head .mono { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.meter-bar { position: relative; height: 12px; background: var(--grid); border-radius: 3px; }
+.meter-bar .fill { display: block; height: 100%; max-width: 100%; border-radius: 3px; background: var(--good); }
+.meter-bar .fill.warn { background: var(--warning); }
+.meter-bar .fill.fail { background: var(--critical); }
+.meter-bar .limit { position: absolute; top: -4px; bottom: -4px; width: 0; border-left: 2px dashed var(--ink); }
+.meter .sub { margin-top: 6px; }
+.card .empty-card { border: 0; padding: 4px 0; background: none; backdrop-filter: none; }
+@media (max-width: 420px) { .check { grid-template-columns: 1fr; gap: 6px; } }
+
 /* empty states */
 .empty-card { border-style: dashed; color: var(--ink-2); }
 .empty-card strong { color: var(--ink); }
@@ -206,7 +230,7 @@ footer p { margin: 10px 0 0; }
   .verdict { grid-template-columns: 1fr; gap: 2px; }
   .verdict dd { margin-bottom: 8px; }
   .card { padding: 14px; }
-  nav { margin-left: 0; width: 100%; }
+  nav { margin-left: 0; width: 100%; flex-wrap: wrap; }
   nav button { padding: 7px 10px; }
   .brand small { display: none; }
 }

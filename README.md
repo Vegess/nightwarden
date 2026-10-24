@@ -129,7 +129,9 @@ decisions are in [docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
 ## API
 
 Public, read-only: `GET /health`, `/api/status`, `/api/incidents`, `/api/incidents/{id}`, `/api/decisions`,
-`/api/eval`.
+`/api/eval`, `/api/health/checks` (self-checks, cached 60 s), `/api/usage` (free-tier budgets, cached 5 min).
+The first poll after midnight UTC writes yesterday's `daily_stats` row (backfilling missed days); snapshots are
+kept 30 days and deleted only once their day is rolled up.
 Admin (`Authorization: Bearer $ADMIN_TOKEN`): `POST /api/deploys`, `POST /api/events` (fire a test event end to
 end), `POST /api/alerts/test` (send one test page, no triage), `POST /api/incidents/{id}/resolve`.
 

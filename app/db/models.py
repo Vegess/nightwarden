@@ -5,11 +5,13 @@ events     a signal a detector fired; each one is triaged
 deploys    target deploys (seen as a commit change, or posted by CI)
 decisions  one row per triage run: the audit trail AND the evaluation table
 incidents  what a human sees: opened by page/notify/watch decisions
+alerts     one row per alert delivery attempt (webhook or email), written by notify.alert
+daily_stats one row per UTC day: the rollup that outlives the 30-day snapshot retention
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -95,3 +97,35 @@ class Decision(Base):
     expected_action: Mapped[str | None] = mapped_column(String(10), nullable=True)
     correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    level: Mapped[str] = mapped_column(String(10), nullable=False)
+    channel: Mapped[str] = mapped_column(String(10), nullable=False)          # webhook | email
+    ok: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_short: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class DailyStat(Base):
+    __tablename__ = "daily_stats"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)                # UTC day
+    polls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    polls_ok: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    events: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    decisions_by_action: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    decisions_by_decided_by: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    decision_ms_p50: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision_ms_p95: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    incidents_opened: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    incidents_resolved: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    emails_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    emails_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

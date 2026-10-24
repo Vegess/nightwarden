@@ -6,7 +6,8 @@ Also notices, without any setup on the target's side:
 - an outage: three polls in a row failed (about 3 minutes; a free-tier cold
   start takes about one)
 After each healthy cycle it pings HEARTBEAT_URL, so if Nightwarden itself
-stops, the heartbeat service raises the alarm.
+stops, the heartbeat service raises the alarm. The first cycle after midnight
+UTC also writes yesterday's daily_stats row and applies snapshot retention.
 """
 import json
 import logging
@@ -15,7 +16,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agent.evidence import LiveEvidence
@@ -23,7 +24,7 @@ from app.collector import detectors, signals, target
 from app.core.config import get_settings
 from app.db.models import Decision, Deploy, Event, Incident, Snapshot
 from app.db.session import SessionLocal
-from app.services import notify, triage
+from app.services import notify, rollup, triage
 
 logger = logging.getLogger("nightwarden.poller")
 settings = get_settings()
@@ -128,8 +129,13 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
 
     triage_pending(db, now, triage_client)
     triage.auto_resolve(db, now=now)
-    db.execute(delete(Snapshot).where(Snapshot.ts < now - timedelta(days=7)).execution_options(synchronize_session=False))
     db.commit()
+    if rollup.due(now):
+        try:
+            rollup.rollup(db, now)
+        except Exception:  # noqa: BLE001 — a failed rollup is retried by tomorrow's backfill
+            db.rollback()
+            logger.exception("Daily rollup failed")
     _state["last_ok"] = now.isoformat()
     if settings.heartbeat_url:
         try:

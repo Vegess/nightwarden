@@ -425,9 +425,81 @@ function renderHow() {
     </ol>`;
 }
 
+/* ---------- Health: Nightwarden's own self-checks ---------- */
+const CHECK = { pass: "Pass", warn: "Warning", fail: "Failing" };
+const OVERALL = { pass: "All checks pass", warn: "Working, with warnings", fail: "Something needs attention" };
+async function renderHealth() {
+  const el = $("#health");
+  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  let h;
+  try { h = await get("/api/health/checks"); } catch (e) { el.innerHTML = `<h1>Health</h1>${failCard("health checks", e)}`; return; }
+  const checks = h.checks || [];
+  el.innerHTML = `
+    <h1>Health</h1>
+    <p class="sub">Nightwarden checking itself: polling, alerting, AI triage and its database. Refreshed every minute.</p>
+    <div class="card overall ${esc(h.overall)}"><span class="pill ${esc(h.overall)}">${esc(CHECK[h.overall] || h.overall)}</span>
+      <strong>${esc(OVERALL[h.overall] || "")}</strong><span class="muted">checked ${ago(h.checked_at)}</span></div>
+    <h2>Checks</h2>
+    ${checks.length ? `<div class="list checks">${checks.map((c) => `<div class="card check">
+        <span class="pill ${esc(c.status)}">${esc(CHECK[c.status] || c.status)}</span>
+        <div class="check-body"><strong>${esc(c.name)}</strong><div class="sub">${esc(c.detail)}</div></div></div>`).join("")}</div>`
+      : emptyCard("No checks returned", "The server answered without any checks. Try again in a minute.")}`;
+}
+
+/* ---------- Usage: free-tier budgets ---------- */
+const num = (v) => (v == null ? "—" : Number(v).toLocaleString());
+function meter(label, used, limit, { sub = "", warnAt = 0.8, unit = "" } = {}) {
+  if (limit == null || used == null) return "";
+  const scale = Math.max(used, limit) * 1.15 || 1;
+  const share = limit ? used / limit : 1;
+  const tone = share >= 1 ? "fail" : share >= warnAt ? "warn" : "pass";
+  return `<div class="meter">
+    <div class="meter-head"><span>${label}</span><span class="mono">${num(used)}${unit} / ${num(limit)}${unit} · ${Math.round(share * 100)}%</span></div>
+    <div class="meter-bar" role="meter" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${used}" aria-label="${esc(label)}">
+      <span class="fill ${tone}" style="width:${((used / scale) * 100).toFixed(1)}%"></span>
+      <span class="limit" style="left:${((limit / scale) * 100).toFixed(1)}%" title="limit ${num(limit)}"></span>
+    </div>
+    ${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+async function renderUsage() {
+  const el = $("#usage");
+  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  let u;
+  try { u = await get("/api/usage"); } catch (e) { el.innerHTML = `<h1>Usage</h1>${failCard("usage", e)}`; return; }
+  const g = u.groq, p = u.polls, m = u.emails, n = u.neon;
+  const left = g.triages_left_today == null
+    ? "No AI triage recorded yet, so there is no per-triage average to estimate from."
+    : `About <b>${num(g.triages_left_today)}</b> AI triages left today (≈${num(g.mean_tokens_per_triage)} tokens each, from the last ${g.triage_sample}).`;
+  const neon = !n.configured ? emptyCard("Neon usage: not configured", "Set NEON_API_KEY and NEON_PROJECT_ID to show compute hours here.")
+    : n.error ? emptyCard("Couldn't read Neon usage", esc(n.error))
+    : `<div class="card">${meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
+  el.innerHTML = `
+    <h1>Usage</h1>
+    <p class="sub">Free-tier budgets, from what Nightwarden already records. The dashed mark on each bar is the limit. Updated every 5 minutes.</p>
+    <h2>Groq tokens</h2>
+    <div class="card">
+      ${meter("Today", g.today.total, g.limit_per_day, { sub: `${num(g.today.live)} live · ${num(g.today.eval)} evaluation` })}
+      <p class="sub">${left}</p>
+      ${meter("Month to date", g.month.total, g.limit_per_day * new Date(u.generated_at).getUTCDate(), { sub: `${num(g.month.live)} live · ${num(g.month.eval)} evaluation · limit is the daily cap × days so far` })}
+    </div>
+    <h2>Polls</h2>
+    <div class="card">
+      ${p.month ? meter("Today", p.today, p.limit_per_day, { warnAt: 1.01, sub: "one every 10 minutes is 144 a day" }) + meter("Month to date", p.month, p.month_limit, { warnAt: 1.01 })
+        : emptyCard("No polls yet", "Poll counts appear after the first poll.")}
+    </div>
+    <h2>Alert emails</h2>
+    <div class="card">
+      ${m.month || m.month_failed ? meter("Today", m.today, m.limit_per_day, { sub: m.today_failed ? `${m.today_failed} failed today` : "" })
+        + meter("Month to date", m.month, m.month_limit, { sub: m.month_failed ? `${m.month_failed} failed this month` : "" })
+        : emptyCard("No alert emails this month", "Emails go out for pages only. The Brevo free plan allows 300 a day.")}
+    </div>
+    <h2>Neon</h2>
+    ${neon}`;
+}
+
 /* ---------- routing: real paths, so every incident has a shareable link ---------- */
-const TABS = ["live", "incidents", "eval", "how"];
-const TITLES = { live: "Nightwarden", eval: "Evaluation · Nightwarden", how: "How it works · Nightwarden" };
+const TABS = ["live", "incidents", "eval", "how", "health", "usage"];
+const TITLES = { live: "Nightwarden", eval: "Evaluation · Nightwarden", how: "How it works · Nightwarden", health: "Health · Nightwarden", usage: "Usage · Nightwarden" };
 function route() {
   if (location.hash.length > 1) {  // old #tab/id links keep working
     const h = location.hash.slice(1);
@@ -439,7 +511,7 @@ function route() {
   document.querySelectorAll("main>section").forEach((s) => (s.hidden = s.id !== name));
   hideTip();
   if (TITLES[name]) document.title = TITLES[name];
-  ({ live: renderLive, incidents: () => renderIncidents(id && decodeURIComponent(id)), eval: renderEval, how: renderHow })[name]();
+  ({ live: renderLive, incidents: () => renderIncidents(id && decodeURIComponent(id)), eval: renderEval, how: renderHow, health: renderHealth, usage: renderUsage })[name]();
 }
 function go(path) {
   if (path !== location.pathname) history.pushState(null, "", path);
@@ -457,4 +529,8 @@ document.addEventListener("click", (e) => {
 });
 addEventListener("popstate", route);
 route();
-setInterval(() => { if (!$("#live").hidden && !document.hidden) renderLive(); }, 60000);
+setInterval(() => {
+  if (document.hidden) return;
+  if (!$("#live").hidden) renderLive();
+  if (!$("#health").hidden) renderHealth();
+}, 60000);

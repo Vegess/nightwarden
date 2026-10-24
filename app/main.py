@@ -15,7 +15,7 @@ from app.core.logging import configure_logging, redact_url
 from app.core.security import RateLimit, SecurityHeaders
 from app.db.models import Incident
 from app.db.session import get_db
-from app.routes import api, health
+from app.routes import api, health, ops
 
 settings = get_settings()
 configure_logging(settings.log_json)
@@ -42,6 +42,7 @@ app.add_middleware(RateLimit)
 app.add_middleware(SecurityHeaders)
 app.include_router(health.router)
 app.include_router(api.router)
+app.include_router(ops.router)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -55,6 +56,7 @@ def _index() -> str:
 @app.get("/incidents", include_in_schema=False)
 @app.get("/eval", include_in_schema=False)
 @app.get("/how", include_in_schema=False)
+@app.get("/usage", include_in_schema=False)
 def dashboard():
     return FileResponse(os.path.join(STATIC, "index.html"))
 
