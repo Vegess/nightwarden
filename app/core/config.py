@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     neon_api_key: str | None = None
     neon_project_id: str | None = None
     neon_cu_hours_limit: float = 100.0      # free plan, per month
+    neon_transfer_limit_gb: float = 5.0     # free plan network transfer, per month
 
     # Alerts. Discord or Slack incoming webhook; email through Brevo.
     notify_webhook_url: str | None = None

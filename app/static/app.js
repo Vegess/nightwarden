@@ -109,10 +109,10 @@ function tile(label, value, sub) {
   return `<div class="card"><div class="label">${label}</div><div class="big">${value}</div><div class="sub">${sub || "&nbsp;"}</div></div>`;
 }
 const emptyCard = (title, body) => `<div class="card empty-card"><strong>${title}</strong><p>${body}</p></div>`;
-const failCard = (what, e) => emptyCard(`Couldn't load ${what}`, `${esc(e?.message || e)}. Retrying in a minute.`);
+const failCard = (what, e) => emptyCard(`Couldn't load ${what}`, `${esc(e?.message || e)}. Retrying in 2 minutes.`);
 const pathText = (d) => d.decided_by || (d.degraded ? "rules" : "agent");
 const pathBadges = (d) => `<span class="pill plain path">decided by ${esc(pathText(d))}</span>${d.degraded ? '<span class="pill degraded">degraded</span>' : ""}`;
-const toolCount = (d) => (d.tool_calls || []).filter((c) => c.tool !== "decide").length;
+const toolCount = (d) => d.tool_count ?? (d.tool_calls || []).filter((c) => c.tool !== "decide").length;
 function decisionRow(d) {
   const n = toolCount(d);
   const href = d.incident_id ? `/incidents/${encodeURIComponent(d.incident_id)}` : null;
@@ -186,7 +186,7 @@ function signalsHtml(s) {
 async function renderLive() {
   const el = $("#live");
   if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
-  const [s, st, decisions] = await Promise.allSettled([get("/api/status"), get("/api/stats"), get("/api/decisions?limit=6")]);
+  const [s, st, decisions] = await Promise.allSettled([get("/api/status"), get("/api/stats"), get("/api/decisions?limit=6&brief=1")]);
   if (s.status === "fulfilled") $("#svc").textContent = s.value.service;
   el.innerHTML = `
     ${s.status === "fulfilled" ? heroHtml(s.value) : failCard("status", s.reason)}
@@ -436,7 +436,7 @@ async function renderHealth() {
   const checks = h.checks || [];
   el.innerHTML = `
     <h1>Health</h1>
-    <p class="sub">Nightwarden checking itself: polling, alerting, AI triage and its database. Refreshed every minute.</p>
+    <p class="sub">Nightwarden checking itself: polling, alerting, AI triage and its database. Refreshed every 2 minutes.</p>
     <div class="card overall ${esc(h.overall)}"><span class="pill ${esc(h.overall)}">${esc(CHECK[h.overall] || h.overall)}</span>
       <strong>${esc(OVERALL[h.overall] || "")}</strong><span class="muted">checked ${ago(h.checked_at)}</span></div>
     <h2>Checks</h2>
@@ -448,11 +448,11 @@ async function renderHealth() {
 
 /* ---------- Usage: free-tier budgets ---------- */
 const num = (v) => (v == null ? "—" : Number(v).toLocaleString());
-function meter(label, used, limit, { sub = "", warnAt = 0.8, unit = "" } = {}) {
+function meter(label, used, limit, { sub = "", warnAt = 0.8, failAt = 1, unit = "" } = {}) {
   if (limit == null || used == null) return "";
   const scale = Math.max(used, limit) * 1.15 || 1;
   const share = limit ? used / limit : 1;
-  const tone = share >= 1 ? "fail" : share >= warnAt ? "warn" : "pass";
+  const tone = share >= failAt ? "fail" : share >= warnAt ? "warn" : "pass";
   return `<div class="meter">
     <div class="meter-head"><span>${label}</span><span class="mono">${num(used)}${unit} / ${num(limit)}${unit} · ${Math.round(share * 100)}%</span></div>
     <div class="meter-bar" role="meter" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${used}" aria-label="${esc(label)}">
@@ -470,9 +470,11 @@ async function renderUsage() {
   const left = g.triages_left_today == null
     ? "No AI triage recorded yet, so there is no per-triage average to estimate from."
     : `About <b>${num(g.triages_left_today)}</b> AI triages left today (≈${num(g.mean_tokens_per_triage)} tokens each, from the last ${g.triage_sample}).`;
-  const neon = !n.configured ? emptyCard("Neon usage: not configured", "Set NEON_API_KEY and NEON_PROJECT_ID to show compute hours here.")
+  const neon = !n.configured ? emptyCard("Neon usage: not configured", "Set NEON_API_KEY and NEON_PROJECT_ID to show network transfer and compute hours here.")
     : n.error ? emptyCard("Couldn't read Neon usage", esc(n.error))
-    : `<div class="card">${meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
+    : `<div class="card">
+        ${n.transfer ? meter("Network transfer · this month", n.transfer.gb, n.transfer.limit_gb, { unit: " GB", warnAt: 0.7, failAt: 0.9, sub: "warn at 70 %, fail at 90 %" }) : ""}
+        ${meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
   el.innerHTML = `
     <h1>Usage</h1>
     <p class="sub">Free-tier budgets, from what Nightwarden already records. The dashed mark on each bar is the limit. Updated every 5 minutes.</p>
@@ -529,8 +531,14 @@ document.addEventListener("click", (e) => {
 });
 addEventListener("popstate", route);
 route();
-setInterval(() => {
+/* Refresh every 2 minutes, only while the tab is visible: every refresh is a database read. */
+const REFRESH_MS = 120000;
+let lastRefresh = Date.now();
+function refresh() {
   if (document.hidden) return;
+  lastRefresh = Date.now();
   if (!$("#live").hidden) renderLive();
   if (!$("#health").hidden) renderHealth();
-}, 60000);
+}
+setInterval(refresh, REFRESH_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - lastRefresh >= REFRESH_MS) refresh(); });

@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -76,3 +76,9 @@ def incident_page(incident_id: str, db: Session = Depends(get_db)):
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     return FileResponse(os.path.join(STATIC, "favicon.svg"), media_type="image/svg+xml")
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots():
+    """Crawlers fetching the JSON API cost database reads; the pages are fine to index."""
+    return PlainTextResponse("User-agent: *\nDisallow: /api/\n")

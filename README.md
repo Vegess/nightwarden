@@ -132,6 +132,12 @@ Public, read-only: `GET /health`, `/api/status`, `/api/incidents`, `/api/inciden
 `/api/eval`, `/api/health/checks` (self-checks, cached 60 s), `/api/usage` (free-tier budgets, cached 5 min).
 The first poll after midnight UTC writes yesterday's `daily_stats` row (backfilling missed days); snapshots are
 kept 30 days and deleted only once their day is rolled up.
+
+Database egress is kept small on purpose (Neon's free plan meters network transfer): a poll reads one
+`poller_state` row instead of past snapshots, stored readings keep only the `/metrics` keys something reads,
+queries select columns rather than rows, and public reads carry `Cache-Control: public, s-maxage=60` so the
+CDN answers repeat viewers. `python -m scripts.measure_egress` measures it; `--sizes` reports row sizes in the
+live database.
 Admin (`Authorization: Bearer $ADMIN_TOKEN`): `POST /api/deploys`, `POST /api/events` (fire a test event end to
 end), `POST /api/alerts/test` (send one test page, no triage), `POST /api/incidents/{id}/resolve`.
 

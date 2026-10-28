@@ -5,7 +5,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app.db.models import Alert, DailyStat, Decision, Event, Incident, Snapshot
+from app.db.models import Alert, DailyStat, Decision, Event, Incident, PollerState, Snapshot
 from app.services.notify import alert as real_alert  # bound before the autouse fixture swaps it out
 from tests.test_api import client
 
@@ -15,9 +15,7 @@ NOW = datetime(2026, 10, 24, 0, 5, tzinfo=timezone.utc)
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
     from app.routes import ops
-    from app.services import rollup
     ops._cache.clear()
-    monkeypatch.setitem(rollup._done_through, "date", None)
 
 
 def _decision(db, ts, action="notify", source="live", triager="agent", tokens=(100, 20), ms=1000, degraded=False):
@@ -61,9 +59,9 @@ def test_rollup_backfills_is_idempotent_and_retains_30_days(db):
     _decision(db, d2, "page", source="eval")  # evaluation runs stay out of the rollup
     db.commit()
 
-    written = rollup.rollup(db, NOW)
-    assert written[0] == old.date() and len(written) == 40
-    assert written[-1] == date(2026, 10, 23)
+    assert rollup.rollup(db, NOW) == date(2026, 10, 23)
+    days = db.scalars(select(DailyStat.date).order_by(DailyStat.date)).all()
+    assert days[0] == old.date() and days[-1] == date(2026, 10, 23) and len(days) == 40
     s = db.get(DailyStat, date(2026, 10, 23))
     assert (s.polls, s.polls_ok, s.events, s.pages, s.tokens_in, s.tokens_out) == (1, 1, 2, 1, 100, 20)
     assert json.loads(s.decisions_by_action) == {"page": 1, "watch": 1}
@@ -78,7 +76,8 @@ def test_rollup_backfills_is_idempotent_and_retains_30_days(db):
                for t in db.scalars(select(Snapshot.ts)))
     assert len(db.scalars(select(Snapshot)).all()) == 4
 
-    assert rollup.rollup(db, NOW) == []  # idempotent
+    rollup.rollup(db, NOW)  # idempotent
+    assert len(db.scalars(select(DailyStat)).all()) == 40
     assert db.get(DailyStat, date(2026, 10, 23)).polls == 1
 
 
@@ -92,12 +91,23 @@ def test_old_snapshots_are_rolled_up_before_they_are_deleted(db):
     assert db.scalars(select(Snapshot)).all() == []
 
 
-def test_rollup_runs_once_in_the_first_window_after_midnight(db):
+def test_rollup_done_check_lives_in_the_database(db, monkeypatch):
+    """Serverless: every poll may be a cold start, so 'already rolled up' must come from the DB, at no extra query."""
+    from app.collector import poller
+    from app.db.models import PollerState
     from app.services import rollup
-    assert rollup.due(NOW)
-    assert not rollup.due(NOW + timedelta(minutes=20))
-    rollup.rollup(db, NOW)
-    assert not rollup.due(NOW + timedelta(minutes=2))  # already done in this process
+    assert rollup.due(None, NOW) and rollup.due(date(2026, 10, 22), NOW) and not rollup.due(date(2026, 10, 23), NOW)
+    runs = []
+    real = rollup.rollup
+    monkeypatch.setattr(rollup, "rollup", lambda db, now: runs.append(now) or real(db, now))
+    fetch = lambda: {"commit": "a", "uptime_s": 100}  # noqa: E731
+    poller.poll_once(db, fetch=fetch, now=NOW)
+    db.expunge_all()  # a fresh "process": nothing remembered but the database
+    poller.poll_once(db, fetch=fetch, now=NOW + timedelta(minutes=10))
+    poller.poll_once(db, fetch=fetch, now=NOW + timedelta(hours=5))
+    assert len(runs) == 1 and db.get(PollerState, "citebase").rolled_through == date(2026, 10, 23)
+    poller.poll_once(db, fetch=fetch, now=NOW + timedelta(days=1))
+    assert len(runs) == 2 and db.get(PollerState, "citebase").rolled_through == date(2026, 10, 24)
 
 
 def test_poll_rolls_up_after_midnight(db):
@@ -163,7 +173,7 @@ def test_neon_usage_reads_the_project(monkeypatch):
     monkeypatch.setattr(ops.httpx, "get", lambda url, **kw: httpx.Response(
         200, json={"project": {"compute_time_seconds": 36000, "consumption_period_start": "2026-10-01T00:00:00Z"}},
         request=httpx.Request("GET", url)))
-    assert ops._neon()["cu_hours"] == 10.0
+    assert ops._neon_fetch()["cu_hours"] == 10.0
 
 
 def test_health_page_and_uptime_json(db, monkeypatch):
@@ -182,7 +192,8 @@ def test_migrations_reach_head_and_match_the_models(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path}/m.db"
     monkeypatch.setattr(get_settings(), "database_url", url)
     command.upgrade(Config("alembic.ini"), "head")
-    cols = {t: {c["name"] for c in inspect(create_engine(url)).get_columns(t)} for t in ("alerts", "daily_stats")}
+    cols = {t: {c["name"] for c in inspect(create_engine(url)).get_columns(t)} for t in ("alerts", "daily_stats", "poller_state")}
     assert cols["alerts"] == {c.name for c in Alert.__table__.columns}
     assert cols["daily_stats"] == {c.name for c in DailyStat.__table__.columns}
     command.downgrade(Config("alembic.ini"), "0001_initial")
+    assert cols["poller_state"] == {c.name for c in PollerState.__table__.columns}
