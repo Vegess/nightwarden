@@ -33,6 +33,8 @@ from app.services import notify, rollup, triage
 logger = logging.getLogger("nightwarden.poller")
 settings = get_settings()
 WINDOW = timedelta(minutes=5, seconds=30)
+BACKUP_CHECK_EVERY = timedelta(hours=12)  # health passes on a success within 24 h
+BACKUP_RETRY_AFTER = timedelta(hours=1)   # after a failed check
 SLOT_S = 600                 # typical traffic: one requests_5m value per 10-minute slot, 24 h of slots
 TYPICAL_MIN_SLOTS = 30
 # The /metrics keys signals.delta/window, the deploy check and /api/status read. Everything else is dropped.
@@ -183,6 +185,7 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
         except Exception:  # noqa: BLE001 — a failed rollup is retried on the next poll
             db.rollback()
             logger.exception("Daily rollup failed")
+    check_backup(db, state, now)
     _state["last_ok"] = now.isoformat()
     if settings.heartbeat_url:
         try:
@@ -190,6 +193,24 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
         except httpx.HTTPError:
             logger.warning("Heartbeat ping failed")
     return fired
+
+
+def check_backup(db: Session, state: PollerState, now: datetime) -> None:
+    """The backup AI's 1-token check, twice a day, stored on the state row for /api/health/checks."""
+    from app.agent import providers
+    backup = providers.backup()
+    if backup is None:
+        return
+    every = BACKUP_CHECK_EVERY if state.backup_error is None else BACKUP_RETRY_AFTER
+    if state.backup_checked_at and now - _utc(state.backup_checked_at) < every:
+        return
+    ok, error = providers.ping(backup)
+    state.backup_checked_at, state.backup_error = now, error
+    if ok:
+        state.backup_ok_at = now
+    else:
+        logger.warning("Backup AI check failed: %s", error)
+    db.commit()
 
 
 def _loop(stop: threading.Event) -> None:

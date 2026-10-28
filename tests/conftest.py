@@ -21,6 +21,13 @@ def db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_backup_provider(monkeypatch):
+    """Tests never reach a real backup provider, whatever the developer's environment holds."""
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "backup_llm_api_key", None)
+
+
+@pytest.fixture(autouse=True)
 def quiet_alerts(monkeypatch):
     """Record alerts instead of sending them."""
     sent = []

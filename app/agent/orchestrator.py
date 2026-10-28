@@ -121,7 +121,8 @@ def _valid_decision(args: dict) -> str | None:
 
 
 def triage(event: dict, evidence: Evidence, client=None, model: str | None = None,
-           max_rounds: int | None = None) -> TriageResult:
+           max_rounds: int | None = None, provider: str = "Groq") -> TriageResult:
+    """`provider` only names the model's provider in short errors ("Gemini rate limit (429)")."""
     client = client or _client()
     model = model or settings.groq_model
     max_rounds = max_rounds or settings.agent_max_rounds
@@ -162,7 +163,7 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
                 failures += 1
                 logger.warning("Triage model call failed (round %s): %s", round_i + 1, str(exc)[:300])
                 if failures >= 2 or last or delay is not None:
-                    raise AgentUnavailable(short_error(exc)) from exc
+                    raise AgentUnavailable(short_error(exc, provider)) from exc
                 break
         if resp is None:
             continue
