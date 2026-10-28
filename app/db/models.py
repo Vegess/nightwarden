@@ -95,6 +95,7 @@ class Decision(Base):
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider: Mapped[str | None] = mapped_column(String(12), nullable=True)  # groq | gemini | anthropic | rules
     # Evaluation only.
     scenario: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expected_action: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -145,3 +146,7 @@ class PollerState(Base):
     traffic: Mapped[str] = mapped_column(Text, nullable=False, default="[]")       # [[10-min slot, requests_5m], ...] 24 h
     failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)       # consecutive failed polls
     rolled_through: Mapped[date | None] = mapped_column(Date, nullable=True)      # last day in daily_stats
+    # The backup AI's 1-token check, run from the poll at most every BACKUP_CHECK_EVERY (never per page load).
+    backup_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    backup_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    backup_error: Mapped[str | None] = mapped_column(String(200), nullable=True)

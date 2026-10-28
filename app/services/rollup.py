@@ -40,7 +40,7 @@ def compute_day(db: Session, day: date) -> DailyStat:
                             .group_by(Snapshot.ok)).all())
     events = db.scalar(select(func.count()).select_from(Event).where(
         Event.ts >= start, Event.ts < end, Event.source != "eval")) or 0
-    decisions = db.execute(select(Decision.action, Decision.triager, Decision.tokens_in, Decision.tokens_out,
+    decisions = db.execute(select(Decision.action, Decision.triager, Decision.provider, Decision.tokens_in, Decision.tokens_out,
                                   Decision.latency_ms).join(Event, Event.id == Decision.event_id).where(
         Decision.ts >= start, Decision.ts < end, Event.source != "eval")).all()
     ms = [d.latency_ms for d in decisions]

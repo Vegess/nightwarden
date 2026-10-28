@@ -62,11 +62,11 @@ def _public_calls(calls: list[dict], full: bool) -> list[dict]:
              **({"result_hidden": True} if "result_preview" in c else {})} for c in calls]
 
 
-def decided_by(d: Decision) -> str:
+def decided_by(d) -> str:
     """Which path produced a decision: the AI provider's name, or "rules"."""
     if d.triager != "agent":
         return "rules"
-    return getattr(d, "provider", None) or "groq"
+    return d.provider or "groq"  # decisions from before decisions.provider existed were all Groq
 
 
 def _iso(dt):
@@ -196,7 +196,7 @@ def decisions(limit: int = 30, brief: bool = False, db: Session = Depends(get_db
         return [_decision_out(d, e, full) for d, e in rows]
     tool_count = _count(Decision.tool_calls, '"tool": ') - _count(Decision.tool_calls, '"tool": "decide"')
     rows = db.execute(q(
-        Decision.id, Decision.ts, Decision.triager, Decision.action, Decision.confidence, Decision.summary,
+        Decision.id, Decision.ts, Decision.triager, Decision.provider, Decision.action, Decision.confidence, Decision.summary,
         Decision.latency_ms, Decision.degraded, Decision.incident_id, Decision.tokens_in, Decision.tokens_out,
         Decision.rounds, Event.kind, Event.detail, tool_count.label("tool_count"))).all()
     return [{"id": r.id, "ts": _iso(r.ts), "triager": r.triager, "action": r.action, "confidence": r.confidence,

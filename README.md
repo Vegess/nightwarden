@@ -133,6 +133,12 @@ Public, read-only: `GET /health`, `/api/status`, `/api/incidents`, `/api/inciden
 The first poll after midnight UTC writes yesterday's `daily_stats` row (backfilling missed days); snapshots are
 kept 30 days and deleted only once their day is rolled up.
 
+Triage tries Groq, then the backup AI (`BACKUP_LLM_PROVIDER`, Gemini by default, when `BACKUP_LLM_API_KEY` is set),
+then the rules. `decisions.provider` records which one decided; anything not decided by Groq is `degraded`.
+Provider errors are shortened ("Gemini rate limit (429)") before they reach a rationale or an alert. The poll
+makes a 1-token test call to the backup twice a day; `/api/health/checks` passes it only after a success in the
+last 24 h.
+
 Database egress is kept small on purpose (Neon's free plan meters network transfer): a poll reads one
 `poller_state` row instead of past snapshots, stored readings keep only the `/metrics` keys something reads,
 queries select columns rather than rows, and public reads carry `Cache-Control: public, s-maxage=60` so the

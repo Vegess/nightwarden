@@ -15,7 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Alert, Decision, Event, Snapshot
+from app.db.models import Alert, Decision, Event, PollerState, Snapshot
 from app.db.session import get_db
 from app.services import notify
 
@@ -73,6 +73,27 @@ def _alembic_check(db: Session) -> dict:
                   f"{', '.join(sorted(heads))}. Run alembic upgrade head.")
 
 
+def _backup_check(db: Session, now: datetime) -> dict:
+    """Pass only when the key is set AND the poll's 1-token check succeeded in the last 24 h."""
+    name = "Backup AI provider"
+    if not settings.backup_llm_api_key:
+        return _check(name, "warn", "BACKUP_LLM_API_KEY not set; rules take over if Groq fails")
+    which = settings.backup_llm_provider
+    row = db.execute(select(PollerState.backup_checked_at, PollerState.backup_ok_at, PollerState.backup_error)
+                     .where(PollerState.service == settings.target_name)).first()
+    if row is None or row.backup_checked_at is None:
+        return _check(name, "warn", f"{which}: key set, not tested yet (the poll tests it every 12 h)")
+    if row.backup_ok_at and now - _utc(row.backup_ok_at) < timedelta(hours=24):
+        return _check(name, "pass", f"{which}: test call succeeded {_ago(now, row.backup_ok_at)}")
+    return _check(name, "fail", f"{which}: last test call failed ({row.backup_error or 'unknown error'})"
+                  + (f"; last success {_ago(now, row.backup_ok_at)}" if row.backup_ok_at else "; never succeeded"))
+
+
+def _ago(now: datetime, ts: datetime) -> str:
+    h = (now - _utc(ts)).total_seconds() / 3600
+    return f"{h * 60:.0f} min ago" if h < 1 else f"{h:.0f} h ago"
+
+
 def build_checks(db: Session, request_host: str | None, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     out = []
@@ -114,7 +135,7 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
 
     def configured(name, value, why):
         out.append(_check(name, "pass" if value else "warn", "configured" if value else why))
-    configured("Backup AI provider", settings.backup_llm_api_key, "BACKUP_LLM_API_KEY not set; rules take over if Groq fails")
+    out.append(_backup_check(db, now))
     configured("Webhook alerts", settings.notify_webhook_url, "NOTIFY_WEBHOOK_URL not set: pages reach no channel")
     configured("Email alerts", notify.email_configured(), "BREVO_API_KEY or ALERT_EMAIL not set: pages are not emailed")
     configured("Heartbeat", settings.heartbeat_url, "HEARTBEAT_URL not set: nobody notices if polling stops")

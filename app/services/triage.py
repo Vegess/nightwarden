@@ -1,7 +1,9 @@
 """Run triage for one event and act on the decision.
 
-Normal path: the agent. If the model can't be reached (no key, provider
-down, rate limited), the DEGRADED path runs instead: the rules baseline,
+Normal path: the agent on Groq. If Groq can't be reached (no key, provider
+down, rate limited), the agent runs on the backup provider (BACKUP_LLM_PROVIDER,
+when BACKUP_LLM_API_KEY is set), recorded with degraded=True. If no provider
+answers, the DEGRADED rules path runs instead: the rules baseline,
 raised to at least `notify` (and to `page` for the failure classes that are
 invisible to rules), recorded with degraded=True and announced. Citebase
 and Nightwarden share an AI provider; when it fails, that is exactly when a
@@ -17,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.agent.baseline import rules_triage
 from app.agent.evidence import Evidence
 from app.agent.orchestrator import AgentUnavailable, TriageResult, triage as agent_triage
+from app.agent.providers import chain
 from app.core.config import get_settings
 from app.db.models import Decision, Event, Incident
 from app.services import notify
@@ -73,19 +76,28 @@ def run(db: Session, event: Event, evidence: Evidence, client=None) -> Decision:
     global _last_degraded_notice
     payload = {"kind": event.kind, "service": event.service, "detail": event.detail,
                "metrics": json.loads(event.metrics or "{}")}
-    degraded = False
-    try:
-        result = agent_triage(payload, evidence, client=client)
-        triager = "agent"
-    except AgentUnavailable as exc:
-        result = degraded_triage(payload, str(exc))
-        triager, degraded = "degraded", True
+    result, failures = None, []
+    for i, provider in enumerate(chain(client)):
+        try:  # errors arrive already shortened (short_error): no org ids or quoted payloads
+            result = agent_triage(payload, evidence, client=provider.make_client(), model=provider.model,
+                                  provider=provider.label)
+        except AgentUnavailable as exc:
+            failures.append(str(exc)[:160])
+            continue
+        triager, used, degraded = "agent", provider.name, i > 0
+        if degraded:
+            logger.warning("Triage used backup provider %s (%s)", used, "; ".join(failures))
+        break
+    if result is None:
+        reason = "; ".join(failures)
+        result = degraded_triage(payload, reason)
+        triager, used, degraded = "degraded", "rules", True
         now = datetime.now(timezone.utc)
         if _last_degraded_notice is None or now - _last_degraded_notice > timedelta(hours=1):
             _last_degraded_notice = now
             notify.alert("notify", "Nightwarden is triaging without AI",
-                         f"The triage model is unavailable ({str(exc)[:160]}). Signals are handled by rules, "
-                         "raised to notify/page, until it recovers.")
+                         f"No triage model is available ({reason[:300]}). Signals are handled by rules, "
+                         "raised to notify/page, until one recovers.")
 
     incident, should_alert = _incident_for(db, event, result)
     decision = Decision(
@@ -93,6 +105,7 @@ def run(db: Session, event: Event, evidence: Evidence, client=None) -> Decision:
         action=result.action, confidence=result.confidence, summary=result.summary, rationale=result.rationale,
         tool_calls=json.dumps(result.tool_calls, default=str), rounds=result.rounds,
         tokens_in=result.tokens_in, tokens_out=result.tokens_out, latency_ms=result.latency_ms, degraded=degraded,
+        provider=used,
     )
     db.add(decision)
     db.commit()
@@ -102,8 +115,14 @@ def run(db: Session, event: Event, evidence: Evidence, client=None) -> Decision:
     if should_alert and result.action in ("page", "notify"):
         link = f"{settings.public_url.rstrip('/')}/incidents/{incident.id}"
         notify.alert(result.action, f"{event.service}: {result.summary}"[:180],
-                     (result.rationale[:700] + ("\n(degraded: decided without AI)" if degraded else "")), link)
+                     (result.rationale[:700] + _degraded_note(used, degraded)), link)
     return decision
+
+
+def _degraded_note(provider: str, degraded: bool) -> str:
+    if not degraded:
+        return ""
+    return "\n(degraded: decided without AI)" if provider == "rules" else f"\n(degraded: decided by backup AI, {provider})"
 
 
 def auto_resolve(db: Session, quiet_hours: int = 3, now: datetime | None = None) -> int:

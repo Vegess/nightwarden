@@ -192,8 +192,9 @@ def test_migrations_reach_head_and_match_the_models(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path}/m.db"
     monkeypatch.setattr(get_settings(), "database_url", url)
     command.upgrade(Config("alembic.ini"), "head")
-    cols = {t: {c["name"] for c in inspect(create_engine(url)).get_columns(t)} for t in ("alerts", "daily_stats", "poller_state")}
+    cols = {t: {c["name"] for c in inspect(create_engine(url)).get_columns(t)} for t in ("alerts", "daily_stats", "poller_state", "decisions")}
     assert cols["alerts"] == {c.name for c in Alert.__table__.columns}
     assert cols["daily_stats"] == {c.name for c in DailyStat.__table__.columns}
     command.downgrade(Config("alembic.ini"), "0001_initial")
     assert cols["poller_state"] == {c.name for c in PollerState.__table__.columns}
+    assert cols["decisions"] == {c.name for c in Decision.__table__.columns}
