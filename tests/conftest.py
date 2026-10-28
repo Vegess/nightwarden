@@ -25,6 +25,7 @@ def no_backup_provider(monkeypatch):
     """Tests never reach a real backup provider, whatever the developer's environment holds."""
     from app.core.config import get_settings
     monkeypatch.setattr(get_settings(), "backup_llm_api_key", None)
+    monkeypatch.setattr(get_settings(), "orchestrator", "loop")
 
 
 @pytest.fixture(autouse=True)

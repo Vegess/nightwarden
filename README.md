@@ -33,6 +33,9 @@ Citebase /metrics, /metrics/logs
   describes the costs of paging versus missing a failure. It contains no "signal X means action Y" rules.
 - **Fail loud.** If the model is unavailable, Nightwarden falls back to the rules and raises the result: silent-
   failure signals (fallback spike, zero chunks, target down) always page. It never goes quiet because its own AI broke.
+- **Two orchestrators.** `ORCHESTRATOR=loop` (default) is a plain tool-calling loop; `ORCHESTRATOR=langgraph` runs
+  the same steps as a LangGraph state machine. Both share the tools, prompt, `decide` schema, round limit and
+  per-step trace (see the comparison under Evaluation).
 - **Incidents.** Repeats of the same kind within 6 hours merge into one incident; alerts go out only when an incident
   opens or gets more severe. Incidents resolve themselves after 3 quiet hours.
 - **Watching the watcher.** Every poll pings a healthchecks.io dead-man switch; if polls stop, it emails.
@@ -103,6 +106,13 @@ called normal latency "high" on quiet controls because it had nothing to compare
 this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
 the model judges a value against the service's own normal. Labels and the baseline were not touched.
 
+**Loop vs LangGraph** (held-out variations 1–4, `openai/gpt-oss-120b`; latency includes free-tier rate-limit
+waits). **In progress:** Groq's free daily token cap (200k tokens/day) stops a run part-way. Every run of the *Agent
+eval* workflow resumes where the last stopped (scored cases are skipped), spends at most 120k tokens across both
+orchestrators, and uses the same Groq model for both; the backup provider is never used. `python -m eval.compare`
+prints the current table from `eval/results-loop.json` and `eval/results-langgraph.json`. Compare the two only on
+the paired row (cases both ran): run-to-run variance on 48 cases is large.
+
 Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
 approximate Citebase's real logs but aren't real incidents.
 
@@ -121,6 +131,9 @@ pytest -q                          # no network, no key needed
 python -m eval.run_eval            # baseline only
 python -m eval.run_eval --agent    # agent + baseline (uses Groq quota)
 python -m eval.report              # comparison tables
+python -m eval.run_eval --agent --from-rep 1 --orchestrator loop --out eval/results-loop.json
+python -m eval.run_eval --agent --from-rep 1 --orchestrator langgraph --out eval/results-langgraph.json
+python -m eval.compare             # loop vs LangGraph table
 ```
 
 Deploying (Vercel + Neon + an external scheduler) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
