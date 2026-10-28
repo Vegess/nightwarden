@@ -20,6 +20,43 @@ async function get(path) {
   return r.json();
 }
 
+/* ---------- motion & small building blocks (all motion off under prefers-reduced-motion) ---------- */
+const skeleton = (cards = 3, h = 86) => `<div class="grid skel-grid" aria-busy="true" aria-label="Loading">
+  ${Array.from({ length: cards }, () => `<div class="card skel" style="height:${h}px"></div>`).join("")}</div>`;
+const lastValues = new Map();
+/* Numbers marked data-count count up the first time they appear and pulse when a refresh changes them. */
+function animate(root) {
+  root.querySelectorAll("[data-count]").forEach((el) => {
+    const key = el.dataset.key || el.dataset.count;
+    const to = Number(el.dataset.count), fmt = el.dataset.fmt || "int";
+    const show = (v) => (el.textContent = fmt === "pct" ? (v * 100).toFixed(Number(el.dataset.dp ?? 1)) + "%"
+      : fmt === "dec" ? v.toFixed(1) : Math.round(v).toLocaleString());
+    const prev = lastValues.get(key);
+    lastValues.set(key, to);
+    if (REDUCED || !Number.isFinite(to)) return show(to);
+    if (prev !== undefined) {
+      show(to);
+      if (prev !== to) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
+      return;
+    }
+    const t0 = performance.now(), ms = 650;
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / ms);
+      show(to * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
+const count = (v, key, fmt = "int", dp) => (v == null ? "—"
+  : `<span data-count="${v}" data-key="${esc(key)}" data-fmt="${fmt}"${dp != null ? ` data-dp="${dp}"` : ""}>${fmt === "pct" ? (v * 100).toFixed(dp ?? 1) + "%" : Number(v).toLocaleString()}</span>`);
+/* "x s ago" texts tick every second. */
+const agoSpan = (iso) => `<span data-ago="${esc(iso || "")}">${ago(iso)}</span>`;
+setInterval(() => document.querySelectorAll("[data-ago]").forEach((el) => { if (el.dataset.ago) el.textContent = ago(el.dataset.ago); }), 1000);
+const crumbs = (here) => `<nav class="crumbs" aria-label="Breadcrumb"><a class="back" href="/insights">← Back</a>
+  <ol><li><a href="/insights">Insights</a></li><li aria-current="page">${esc(here)}</li></ol></nav>`;
+const notEnough = (what) => emptyCard("Not enough history yet", what);
+
 /* ---------- night sky ---------- */
 (function sky() {
   const c = $("#sky"), ctx = c.getContext("2d");
@@ -105,8 +142,10 @@ function statusOf(s) {
   if (s.open_incidents) return { ...STATE.warn, label: `${s.open_incidents} open incident${s.open_incidents === 1 ? "" : "s"}` };
   return { ...STATE.ok };
 }
-function tile(label, value, sub) {
-  return `<div class="card"><div class="label">${label}</div><div class="big">${value}</div><div class="sub">${sub || "&nbsp;"}</div></div>`;
+function tile(label, value, sub, href) {
+  const body = `<div class="label">${label}</div><div class="big">${value}</div><div class="sub">${sub || "&nbsp;"}</div>`;
+  return href ? `<a class="card clickable" href="${href}">${body}<span class="arrow" aria-hidden="true">→</span></a>`
+    : `<div class="card">${body}</div>`;
 }
 const emptyCard = (title, body) => `<div class="card empty-card"><strong>${title}</strong><p>${body}</p></div>`;
 const failCard = (what, e) => emptyCard(`Couldn't load ${what}`, `${esc(e?.message || e)}. Retrying in 2 minutes.`);
@@ -126,7 +165,8 @@ function decisionRow(d) {
 }
 function heroHtml(s) {
   const k = statusOf(s);
-  return `<div class="card hero" style="--c:${k.c}">
+  return `<div class="card hero clickable" style="--c:${k.c}">
+      <a class="stretch" href="/health" aria-label="Health checks"></a><span class="arrow" aria-hidden="true">→</span>
       <div class="ring" role="img" aria-label="${esc(k.label)}">
         ${REDUCED || k.icon === "…" ? "" : '<div class="sweep"></div>'}
         <svg viewBox="0 0 92 92" aria-hidden="true"><circle cx="46" cy="46" r="40" fill="none" stroke="var(--grid)" stroke-width="4"/>
@@ -139,8 +179,8 @@ function heroHtml(s) {
         ${!s.last_poll ? `<div class="sub">${POLL_NOTE} The first reading will appear here.</div>` : ""}
         <div class="meta">
           <span>watching ${esc(s.target_host || s.service)}</span>
-          <span>last poll ${ago(s.last_poll)}</span>
-          <span>AI triage: ${esc(s.ai_triage)}${s.last_triage_degraded ? " (last decision used rules)" : ""}</span>
+          <span>last poll ${agoSpan(s.last_poll)}</span>
+          <a class="above" href="/usage">AI triage: ${esc(s.ai_triage)}${s.last_triage_degraded ? " (last decision used rules)" : ""}</a>
           ${s.email_alerts === "off" ? `<span class="warn">email alerts: off</span>` : ""}
           ${s.commit ? `<span class="mono">commit ${esc(String(s.commit).slice(0, 7))}</span>` : ""}
         </div>
@@ -152,13 +192,13 @@ function glanceHtml(st) {
   if (!polls && !st.incidents_7d && !st.resolved_30d) {
     return emptyCard("No readings yet", `Uptime and incident numbers appear after the first successful poll. ${POLL_NOTE}`);
   }
-  const up = (u) => (u?.pct == null ? "—" : (u.pct * 100).toFixed(u.pct === 1 ? 0 : 2) + "%");
+  const up = (u, key) => (u?.pct == null ? "—" : count(u.pct, key, "pct", u.pct === 1 ? 0 : 2));
   const polled = (u) => (u?.polls ? `${u.polls} poll${u.polls === 1 ? "" : "s"}` : "no polls in this window");
   return `<div class="grid tiles">
-      ${tile("Uptime · 24 h", up(st.uptime_24h), polled(st.uptime_24h))}
-      ${tile("Uptime · 7 days", up(st.uptime_7d), polled(st.uptime_7d))}
-      ${tile("Incidents · 7 days", st.incidents_7d, st.incidents_7d ? `${st.pages_7d} paged · ${st.open_incidents} open` : "All quiet")}
-      ${tile("Time to resolve", dur(st.mttr_s), st.resolved_30d ? `average of ${st.resolved_30d} in 30 days` : "no resolved incidents yet")}
+      ${tile("Uptime · 24 h", up(st.uptime_24h, "up24"), polled(st.uptime_24h), "/reports")}
+      ${tile("Uptime · 7 days", up(st.uptime_7d, "up7"), polled(st.uptime_7d), "/reports")}
+      ${tile("Incidents · 7 days", count(st.incidents_7d, "inc7"), st.incidents_7d ? `${st.pages_7d} paged · ${st.open_incidents} open` : "All quiet", "/incidents")}
+      ${tile("Time to resolve", dur(st.mttr_s), st.resolved_30d ? `average of ${st.resolved_30d} in 30 days` : "no resolved incidents yet", "/reports")}
     </div>`;
 }
 function signalsHtml(s) {
@@ -172,7 +212,9 @@ function signalsHtml(s) {
       `Trends need at least two successful polls in the last 90 minutes; ${most ? "there is 1 so far" : "there are none yet"}. ${POLL_NOTE}`);
   }
   const w = s.window || {};
-  const card = (label, key, big, opts, note) => `<div class="card spark-card"><div class="label">${label}</div><div class="big">${big}</div>
+  const card = (label, key, big, opts, note) => `<div class="card spark-card clickable">
+      <a class="stretch" href="/performance" aria-label="${label}: agent performance"></a><span class="arrow" aria-hidden="true">→</span>
+      <div class="label">${label}</div><div class="big">${big}</div>
       ${has(key) >= 2 ? sparkline(col(key), opts) : '<p class="sub nodata">No data for this signal in the last 90 minutes.</p>'}
       ${note ? `<div class="sub">${note}</div>` : ""}</div>`;
   return `<div class="grid">
@@ -185,7 +227,7 @@ function signalsHtml(s) {
 }
 async function renderLive() {
   const el = $("#live");
-  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  if (!el.innerHTML) el.innerHTML = skeleton(1, 132) + "<h2>At a glance</h2>" + skeleton(4) + "<h2>Signals</h2>" + skeleton(4, 140);
   const [s, st, decisions] = await Promise.allSettled([get("/api/status"), get("/api/stats"), get("/api/decisions?limit=6&brief=1")]);
   if (s.status === "fulfilled") $("#svc").textContent = s.value.service;
   el.innerHTML = `
@@ -198,6 +240,7 @@ async function renderLive() {
     ${decisions.status !== "fulfilled" ? failCard("decisions", decisions.reason)
       : decisions.value.length ? `<div class="list">${decisions.value.map(decisionRow).join("")}</div>`
       : emptyCard("No decisions yet. All quiet.", "Nothing has needed triage. Detectors fire on errors, latency, fallback answers, empty retrieval and traffic anomalies.")}`;
+  animate(el);
 }
 
 /* ---------- Incidents + investigation trace ---------- */
@@ -281,7 +324,7 @@ async function renderIncident(el, id) {
 }
 async function renderIncidents(openId) {
   const el = $("#incidents");
-  el.innerHTML = '<p class="sub">Loading…</p>';
+  el.innerHTML = skeleton(3, 70);
   if (openId) return renderIncident(el, openId);
   document.title = "Incidents · Nightwarden";
   try {
@@ -334,16 +377,15 @@ function scenarioChart(rows) {
     <text x="${L}" y="${H - 12}">scenario · bars show correct decisions out of ${max} variations</text>`;
   return `<svg class="chart" id="scen" viewBox="0 0 ${W} ${H}" role="img" aria-label="Correct decisions per scenario, agent versus rules">${g}</svg>`;
 }
-async function renderEval() {
-  const el = $("#eval");
-  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+async function renderEval(el = $("#eval"), head = crumbs("Evaluation")) {
+  if (!el.innerHTML) el.innerHTML = head + skeleton(2, 120);
   try {
     const r = await get("/api/eval");
-    if (!r.available) { el.innerHTML = emptyCard("No evaluation results published yet", "Results appear here after the eval runs (python -m eval.run_eval)."); return; }
+    if (!r.available) { el.innerHTML = head + emptyCard("No evaluation results published yet", "Results appear here after the eval runs (python -m eval.run_eval)."); return; }
     const s = r.summary, b = s.baseline || {}, a = s.agent || {};
-    if (!a.n) { el.innerHTML = emptyCard("Only the rules baseline has been scored so far", "The AI agent's numbers appear once an eval run with a model key has finished."); return; }
+    if (!a.n) { el.innerHTML = head + emptyCard("Only the rules baseline has been scored so far", "The AI agent's numbers appear once an eval run with a model key has finished."); return; }
     const c = s.agent_cost || {};
-    el.innerHTML = `
+    el.innerHTML = `${head}
       <h1>Agent vs. a frozen rules baseline</h1>
       <p class="sub">${b.n} held-out cases: 12 failure scenarios × variations ${(s.reps || []).join(", ")}, never inspected before the run.
         Labels and the rules were frozen before the agent was written. Model <span class="mono">${esc(r.model)}</span>, run ${when(r.generated_at)}.</p>
@@ -368,8 +410,8 @@ async function renderEval() {
         <div id="scenario-view">${evalTable ? scenarioTable(s.per_scenario) : scenarioChart(s.per_scenario)}</div>
       </div>
       <p class="sub" style="margin-top:12px">Weak spot, stated plainly: the agent never dismisses harmless noise (0 of 12 benign cases suppressed) and over-pages a quarter of notify-level problems.</p>`;
-    $("#tbl").onclick = () => { evalTable = !evalTable; renderEval(); };
-    const svg = $("#scen");
+    $("#tbl", el).onclick = () => { evalTable = !evalTable; renderEval(el, head); };
+    const svg = $("#scen", el);
     if (svg) svg.querySelectorAll(".hit").forEach((h) => {
       const p = s.per_scenario[+h.dataset.i];
       const show = (e) => showTip(`<b>${p.scenario}. ${esc(p.name.replaceAll("_", " "))}</b>${p.silent ? " · silent" : ""}<br>expected: ${esc(p.expected)}<br>
@@ -377,7 +419,7 @@ async function renderEval() {
       h.addEventListener("pointermove", show); h.addEventListener("pointerleave", hideTip);
     });
   } catch (e) {
-    el.innerHTML = failCard("evaluation", e);
+    el.innerHTML = head + failCard("evaluation", e);
   }
 }
 function scenarioTable(rows) {
@@ -388,15 +430,14 @@ function scenarioTable(rows) {
 }
 
 /* ---------- How it works ---------- */
-function renderHow() {
-  const el = $("#how");
+function renderHow(el) {
   if (el.dataset.done) return;
   el.dataset.done = "1";
   const node = (x, y, w, title, sub, cls = "") => `<g class="node ${cls}"><rect x="${x}" y="${y}" width="${w}" height="62" rx="12"/>
     <text x="${x + 14}" y="${y + 26}">${title}</text><text class="s" x="${x + 14}" y="${y + 45}">${sub}</text></g>`;
   const wire = (d, warn) => `<path class="wire" d="${d}"/><path class="flow${warn ? " warn" : ""}" d="${d}"/>`;
   el.innerHTML = `
-    <h1>How Nightwarden works</h1>
+    <h1 id="how">How Nightwarden works</h1>
     <p class="sub">A scheduler wakes it every 10 minutes. It reads Citebase's health, decides whether anything looks wrong, and if so an AI agent investigates and decides who needs to know.</p>
     <div class="card" style="margin-top:14px"><div class="scroll">
       <svg class="diagram" viewBox="0 0 1000 410" role="img" aria-label="Pipeline: Citebase metrics and logs, poller, detectors, AI agent with tools, incidents, Discord and dashboard; rules take over if the AI is down">
@@ -425,20 +466,22 @@ function renderHow() {
     </ol>`;
 }
 
+
 /* ---------- Health: Nightwarden's own self-checks ---------- */
 const CHECK = { pass: "Pass", warn: "Warning", fail: "Failing" };
 const OVERALL = { pass: "All checks pass", warn: "Working, with warnings", fail: "Something needs attention" };
 async function renderHealth() {
   const el = $("#health");
-  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  const head = crumbs("Health");
+  if (!el.innerHTML) el.innerHTML = head + skeleton(1, 60) + "<h2>Checks</h2>" + skeleton(6, 64);
   let h;
-  try { h = await get("/api/health/checks"); } catch (e) { el.innerHTML = `<h1>Health</h1>${failCard("health checks", e)}`; return; }
+  try { h = await get("/api/health/checks"); } catch (e) { el.innerHTML = `${head}<h1>Health</h1>${failCard("health checks", e)}`; return; }
   const checks = h.checks || [];
-  el.innerHTML = `
+  el.innerHTML = `${head}
     <h1>Health</h1>
     <p class="sub">Nightwarden checking itself: polling, alerting, AI triage and its database. Refreshed every 2 minutes.</p>
     <div class="card overall ${esc(h.overall)}"><span class="pill ${esc(h.overall)}">${esc(CHECK[h.overall] || h.overall)}</span>
-      <strong>${esc(OVERALL[h.overall] || "")}</strong><span class="muted">checked ${ago(h.checked_at)}</span></div>
+      <strong>${esc(OVERALL[h.overall] || "")}</strong><span class="muted">checked ${agoSpan(h.checked_at)}</span></div>
     <h2>Checks</h2>
     ${checks.length ? `<div class="list checks">${checks.map((c) => `<div class="card check">
         <span class="pill ${esc(c.status)}">${esc(CHECK[c.status] || c.status)}</span>
@@ -448,6 +491,8 @@ async function renderHealth() {
 
 /* ---------- Usage: free-tier budgets ---------- */
 const num = (v) => (v == null ? "—" : Number(v).toLocaleString());
+const day = (iso) => (iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "");
+const TODAY = "today (UTC, resets 05:30 IST)";
 function meter(label, used, limit, { sub = "", warnAt = 0.8, failAt = 1, unit = "" } = {}) {
   if (limit == null || used == null) return "";
   const scale = Math.max(used, limit) * 1.15 || 1;
@@ -463,9 +508,10 @@ function meter(label, used, limit, { sub = "", warnAt = 0.8, failAt = 1, unit = 
 }
 async function renderUsage() {
   const el = $("#usage");
-  if (!el.innerHTML) el.innerHTML = '<p class="sub">Loading…</p>';
+  const head = crumbs("Usage");
+  if (!el.innerHTML) el.innerHTML = head + skeleton(4, 120);
   let u;
-  try { u = await get("/api/usage"); } catch (e) { el.innerHTML = `<h1>Usage</h1>${failCard("usage", e)}`; return; }
+  try { u = await get("/api/usage"); } catch (e) { el.innerHTML = `${head}<h1>Usage</h1>${failCard("usage", e)}`; return; }
   const g = u.groq, p = u.polls, m = u.emails, n = u.neon;
   const left = g.triages_left_today == null
     ? "No AI triage recorded yet, so there is no per-triage average to estimate from."
@@ -475,23 +521,26 @@ async function renderUsage() {
     : `<div class="card">
         ${n.transfer ? meter("Network transfer · this month", n.transfer.gb, n.transfer.limit_gb, { unit: " GB", warnAt: 0.7, failAt: 0.9, sub: "warn at 70 %, fail at 90 %" }) : ""}
         ${meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
-  el.innerHTML = `
+  const tracking = m.tracking_since ? `tracking since ${day(m.tracking_since)}` : "tracking since the first alert email (none recorded yet)";
+  el.innerHTML = `${head}
     <h1>Usage</h1>
     <p class="sub">Free-tier budgets, from what Nightwarden already records. The dashed mark on each bar is the limit. Updated every 5 minutes.</p>
     <h2>Groq tokens</h2>
     <div class="card">
-      ${meter("Today", g.today.total, g.limit_per_day, { sub: `${num(g.today.live)} live · ${num(g.today.eval)} evaluation` })}
+      ${meter(TODAY, g.today.total, g.limit_per_day, { sub: `${num(g.today.live)} live · ${num(g.today.eval)} evaluation` })}
       <p class="sub">${left}</p>
       ${meter("Month to date", g.month.total, g.limit_per_day * new Date(u.generated_at).getUTCDate(), { sub: `${num(g.month.live)} live · ${num(g.month.eval)} evaluation · limit is the daily cap × days so far` })}
     </div>
     <h2>Polls</h2>
     <div class="card">
-      ${p.month ? meter("Today", p.today, p.limit_per_day, { warnAt: 1.01, sub: "one every 10 minutes is 144 a day" }) + meter("Month to date", p.month, p.month_limit, { warnAt: 1.01 })
+      ${p.month ? meter(TODAY, p.today, p.limit_per_day, { warnAt: 1.01, sub: "one every 10 minutes is 144 a day" })
+        + meter("Month to date", p.month, p.month_limit, { warnAt: 1.01, sub: p.expected_since ? `expected: one every 10 minutes since ${when(p.expected_since)}` : "" })
         : emptyCard("No polls yet", "Poll counts appear after the first poll.")}
     </div>
     <h2>Alert emails</h2>
     <div class="card">
-      ${m.month || m.month_failed ? meter("Today", m.today, m.limit_per_day, { sub: m.today_failed ? `${m.today_failed} failed today` : "" })
+      <p class="sub">${tracking}</p>
+      ${m.month || m.month_failed ? meter(TODAY, m.today, m.limit_per_day, { sub: m.today_failed ? `${m.today_failed} failed today` : "" })
         + meter("Month to date", m.month, m.month_limit, { sub: m.month_failed ? `${m.month_failed} failed this month` : "" })
         : emptyCard("No alert emails this month", "Emails go out for pages only. The Brevo free plan allows 300 a day.")}
     </div>
@@ -499,35 +548,227 @@ async function renderUsage() {
     ${neon}`;
 }
 
-/* ---------- routing: real paths, so every incident has a shareable link ---------- */
-const TABS = ["live", "incidents", "eval", "how", "health", "usage"];
-const TITLES = { live: "Nightwarden", eval: "Evaluation · Nightwarden", how: "How it works · Nightwarden", health: "Health · Nightwarden", usage: "Usage · Nightwarden" };
+/* ---------- Insights hub ---------- */
+const HUB = [
+  { path: "/performance", title: "Performance", blurb: "How the agent decides: paths, speed, cost, agreement with the rules." },
+  { path: "/reports", title: "Reports", blurb: "Week, month and year: uptime, incidents, time to resolve, pages." },
+  { path: "/health", title: "Health", blurb: "Nightwarden checking itself: polling, alerts, AI, database." },
+  { path: "/usage", title: "Usage", blurb: "Free-tier budgets: Groq tokens, polls, emails, Neon." },
+  { path: "/eval", title: "Evaluation", blurb: "The agent against a frozen rules baseline on labelled failures." },
+];
+const MINI = {
+  "/performance": async () => {
+    const p = await get("/api/performance?days=7");
+    return p.decisions ? [count(p.decisions, "hub-dec"), `decisions in 7 days · ${pct(p.degraded_pct, 0)} degraded`]
+      : ["—", "No decisions in the last 7 days yet"];
+  },
+  "/reports": async () => {
+    const r = await get("/api/reports?period=week");
+    return r.summary.polls ? [count(r.summary.uptime, "hub-up", "pct", 2), `uptime this week · ${r.summary.incidents} incident${r.summary.incidents === 1 ? "" : "s"}`]
+      : ["—", "Not enough history yet: reports start after the first day is rolled up"];
+  },
+  "/health": async () => {
+    const h = await get("/api/health/checks");
+    const bad = h.checks.filter((c) => c.status !== "pass").length;
+    return [`<span class="pill ${esc(h.overall)}">${esc(CHECK[h.overall])}</span>`, bad ? `${bad} of ${h.checks.length} checks need a look` : `all ${h.checks.length} checks pass`];
+  },
+  "/usage": async () => {
+    const u = await get("/api/usage");
+    return [count(u.groq.today.total / u.groq.limit_per_day, "hub-groq", "pct", 0), "of today's Groq tokens used"];
+  },
+  "/eval": async () => {
+    const r = await get("/api/eval");
+    const a = r.available && r.summary.agent;
+    return a?.n ? [count(a.accuracy, "hub-eval", "pct", 0), `right action on ${a.n} held-out cases (rules: ${pct(r.summary.baseline.accuracy, 0)})`]
+      : ["—", "No agent evaluation published yet"];
+  },
+};
+async function renderInsights() {
+  const el = $("#insights");
+  el.innerHTML = `<h1>Insights</h1><p class="sub">Everything Nightwarden measures about the service and about itself.</p>
+    <div class="hub">${HUB.map((c) => `<a class="card clickable hub-card" href="${c.path}" data-mini="${c.path}">
+      <div class="label">${c.title}</div><div class="big mini-big"><span class="skel-line"></span></div>
+      <div class="sub mini-sub"><span class="skel-line short"></span></div><p class="sub">${c.blurb}</p>
+      <span class="arrow" aria-hidden="true">→</span></a>`).join("")}</div>`;
+  await Promise.all(HUB.map(async (c) => {
+    const card = el.querySelector(`[data-mini="${c.path}"]`);
+    let big, sub;
+    try { [big, sub] = await MINI[c.path](); } catch { [big, sub] = ["—", "Couldn't load right now"]; }
+    if (!card.isConnected) return;
+    card.querySelector(".mini-big").innerHTML = big;
+    card.querySelector(".mini-sub").textContent = sub;
+    animate(card);
+  }));
+}
+
+/* ---------- Performance ---------- */
+let perfDays = 7;
+const seg = (name, options, current) => `<div class="seg" role="group" aria-label="${esc(name)}">${options.map(([v, l]) =>
+  `<button class="btn" data-v="${v}" aria-pressed="${String(v) === String(current)}">${l}</button>`).join("")}</div>`;
+function hbars(entries, total, colors = {}) {
+  if (!total) return "";
+  return `<div class="hbars">${entries.map(([k, v]) => `<div class="hbar"><span class="hl-label">${esc(k)}</span>
+    <span class="hb-track"><span class="hb-fill" style="width:${((v / total) * 100).toFixed(1)}%;background:${colors[k] || "var(--agent)"}"></span></span>
+    <span class="v mono">${v} · ${Math.round((v / total) * 100)}%</span></div>`).join("")}</div>`;
+}
+const ACTION_COLOR = { page: "var(--critical)", notify: "var(--serious)", watch: "var(--info)", suppress: "var(--muted)" };
+const PATH_COLOR = { primary: "var(--agent)", backup: "var(--warning)", rules: "var(--rules)" };
+async function renderPerformance() {
+  const el = $("#performance");
+  const head = crumbs("Performance");
+  el.innerHTML = `${head}<h1>Agent performance</h1>${seg("Window", [[7, "7 days"], [30, "30 days"], [365, "365 days"]], perfDays)}<div id="perf-body">${skeleton(4)}</div>`;
+  el.querySelectorAll(".seg [data-v]").forEach((b) => (b.onclick = () => { perfDays = +b.dataset.v; renderPerformance(); }));
+  const body = $("#perf-body", el);
+  let p;
+  try { p = await get(`/api/performance?days=${perfDays}`); } catch (e) { body.innerHTML = failCard("performance", e); return; }
+  if (!p.decisions) {
+    body.innerHTML = notEnough(`No decisions in the last ${perfDays} days. Performance appears once signals have been triaged.`);
+    return;
+  }
+  const d = p.disagreement;
+  body.innerHTML = `
+    <div class="grid tiles">
+      ${tile("Decisions", count(p.decisions, "perf-n"), `last ${perfDays} days`)}
+      ${tile("Degraded", count(p.degraded_pct, "perf-deg", "pct", 0), "decided without Groq")}
+      ${tile("Decision time", msTxt(Math.round(p.decision_ms.median)) || "—", `median · p95 ${msTxt(p.decision_ms.p95) || "—"}`)}
+      ${tile("Tool calls", p.tool_calls_median ?? "—", "median per AI decision")}
+      ${tile("Tokens", p.mean_tokens == null ? "—" : count(p.mean_tokens, "perf-tok"), "mean per AI decision")}
+      ${tile("Inconclusive", p.inconclusive_pct == null ? "—" : count(p.inconclusive_pct, "perf-inc", "pct", 0), "ran out of rounds")}
+    </div>
+    <h2>Decisions by action</h2>
+    <div class="card">${hbars(Object.entries(p.by_action).sort((a, b) => b[1] - a[1]), p.decisions, ACTION_COLOR)}</div>
+    <h2>Who decided</h2>
+    <div class="card">${hbars(["primary", "backup", "rules"].map((k) => [k, p.decided_by[k] || 0]), p.decisions, PATH_COLOR)}
+      <p class="sub">primary = Groq · backup = the backup AI provider · rules = no AI was available</p></div>
+    <h2>Agent vs. rules (shadow baseline)</h2>
+    ${d.compared ? `<div class="card"><div class="big">${count(d.pct, "perf-dis", "pct", 0)}</div>
+      <div class="sub">of ${d.compared} AI decisions differ from what the rules alone would have said</div>
+      ${d.top_kinds.length ? `<table class="compact"><thead><tr><th>Signal</th><th class="num">Disagreed</th></tr></thead><tbody>
+        ${d.top_kinds.map((k) => `<tr><td>${esc(k.kind.replaceAll("_", " "))}</td><td class="num">${k.n} of ${k.of}</td></tr>`).join("")}</tbody></table>` : ""}</div>`
+      : notEnough("The rules' verdict is recorded next to every new live decision; comparisons appear after the next AI decision.")}`;
+  animate(body);
+}
+
+/* ---------- Reports ---------- */
+const UNIT = { week: "week", month: "month", year: "year" };
+function reportState() {
+  const q = new URLSearchParams(location.search);
+  const period = UNIT[q.get("period")] ? q.get("period") : "week";
+  return { period, offset: Math.max(0, parseInt(q.get("offset") || "0", 10) || 0) };
+}
+function deltaTxt(v, kind, unit) {
+  if (v == null || v === 0) return `same as last ${unit}`;
+  const up = v > 0, arrow = up ? "▲" : "▼";
+  const txt = kind === "pct" ? `${Math.abs(v * 100).toFixed(2)} pt` : kind === "dur" ? dur(Math.abs(v)) : Math.abs(v).toLocaleString();
+  return `${arrow} ${txt} vs last ${unit}`;
+}
+async function renderReports() {
+  const el = $("#reports");
+  const head = crumbs("Reports");
+  const { period, offset } = reportState();
+  const link = (p, o) => `/reports?period=${p}${o ? `&offset=${o}` : ""}`;
+  el.innerHTML = `${head}<h1>Reports</h1><div class="row report-nav">${seg("Period", [["week", "Week"], ["month", "Month"], ["year", "Year"]], period)}
+    <span class="spacer"></span><span id="rep-label" class="mono"></span></div><div id="rep-body">${skeleton(8)}</div>`;
+  el.querySelectorAll(".seg [data-v]").forEach((b) => (b.onclick = () => go(link(b.dataset.v, 0))));
+  const body = $("#rep-body", el);
+  let r;
+  try { r = await get(`/api/reports?period=${period}&offset=${offset}`); } catch (e) { body.innerHTML = failCard("the report", e); return; }
+  $("#rep-label", el).innerHTML = `${r.has_prev ? `<a class="btn" href="${link(period, offset + 1)}" aria-label="Previous ${period}">‹</a>` : '<span class="btn" aria-disabled="true">‹</span>'}
+    <span>${esc(r.label)}${r.partial ? " · so far" : ""}</span>
+    ${r.has_next ? `<a class="btn" href="${link(period, offset - 1)}" aria-label="Next ${period}">›</a>` : '<span class="btn" aria-disabled="true">›</span>'}`;
+  const s = r.summary, d = r.delta, unit = UNIT[period];
+  if (!s.polls && !s.decisions && !s.incidents) {
+    body.innerHTML = notEnough(`Nothing recorded for ${r.label}. Reports read the daily rollup, which starts with the first day Nightwarden polled.`);
+    return;
+  }
+  const sev = Object.entries(s.incidents_by_severity).map(([k, v]) => `${v} ${k}`).join(" · ") || "none";
+  body.innerHTML = `
+    <div class="grid tiles">
+      ${tile("Uptime", s.uptime == null ? "—" : count(s.uptime, `rep-up-${period}`, "pct", 2), deltaTxt(d.uptime, "pct", unit))}
+      ${tile("Polls", count(s.polls, `rep-polls-${period}`), deltaTxt(d.polls, "n", unit))}
+      ${tile("Incidents", count(s.incidents, `rep-inc-${period}`), sev)}
+      ${tile("Time to resolve", dur(s.mttr_s), s.resolved ? `${deltaTxt(d.mttr_s, "dur", unit)} · ${s.resolved} resolved` : "nothing resolved")}
+      ${tile("Pages", count(s.pages, `rep-pages-${period}`), deltaTxt(d.pages, "n", unit))}
+      ${tile("Degraded", s.degraded_pct == null ? "—" : count(s.degraded_pct, `rep-deg-${period}`, "pct", 0), s.decisions ? `of ${s.decisions} decisions` : "no decisions")}
+      ${tile("Groq tokens", count(s.tokens, `rep-tok-${period}`), deltaTxt(d.tokens, "n", unit))}
+      ${tile("Alert emails", count(s.emails_sent, `rep-mail-${period}`), s.emails_failed ? `${s.emails_failed} failed` : deltaTxt(d.emails_sent, "n", unit))}
+    </div>
+    <h2>Top signals</h2>
+    ${s.top_kinds.length ? `<div class="card">${hbars(s.top_kinds.map((k) => [k.kind.replaceAll("_", " "), k.n]), s.events)}</div>`
+      : emptyCard("No signals fired", "Detectors stayed quiet for the whole period.")}
+    <h2>Day by day</h2>
+    <div class="card"><div class="scroll"><table class="compact"><thead><tr><th>Day</th><th class="num">Uptime</th><th class="num">Polls</th>
+      <th class="num">Incidents</th><th class="num">Pages</th><th class="num">Tokens</th></tr></thead><tbody>
+      ${r.daily.slice().reverse().map((x) => `<tr><td>${esc(x.date)}</td><td class="num">${x.uptime == null ? "—" : (x.uptime * 100).toFixed(2) + "%"}</td>
+        <td class="num">${x.polls}</td><td class="num">${x.incidents_opened}</td><td class="num">${x.pages}</td><td class="num">${num(x.tokens)}</td></tr>`).join("")}
+    </tbody></table></div>
+    <p class="sub"><a href="/api/reports?period=${period}&offset=${offset}&format=csv" download>Download CSV</a> · compared with ${esc(r.previous.label)}</p></div>`;
+  animate(body);
+}
+
+/* ---------- About: how it works + evaluation ---------- */
+function renderAbout() {
+  const el = $("#about");
+  if (!el.dataset.done) {
+    el.innerHTML = `<div id="about-how"></div><h2 id="evaluation">Evaluation</h2><div id="about-eval"></div>`;
+    renderHow($("#about-how", el));
+  }
+  renderEval($("#about-eval", el), "");
+  el.dataset.done = "1";
+}
+
+/* ---------- routing: real paths, so every page and incident has a shareable link ---------- */
+const PAGES = {
+  live: { render: renderLive, nav: "live", title: "Nightwarden" },
+  incidents: { nav: "incidents", title: "Incidents · Nightwarden" },
+  insights: { render: renderInsights, nav: "insights", title: "Insights · Nightwarden" },
+  performance: { render: renderPerformance, nav: "insights", title: "Performance · Nightwarden" },
+  reports: { render: renderReports, nav: "insights", title: "Reports · Nightwarden" },
+  health: { render: renderHealth, nav: "insights", title: "Health · Nightwarden" },
+  usage: { render: renderUsage, nav: "insights", title: "Usage · Nightwarden" },
+  eval: { render: () => renderEval(), nav: "insights", title: "Evaluation · Nightwarden" },
+  about: { render: renderAbout, nav: "about", title: "About · Nightwarden" },
+};
+const ALIASES = { "": "live", how: "about" };  // old URLs keep working
 function route() {
-  if (location.hash.length > 1) {  // old #tab/id links keep working
+  if (location.hash.length > 1 && !document.getElementById(location.hash.slice(1))) {  // old #tab/id links keep working
     const h = location.hash.slice(1);
     history.replaceState(null, "", h === "live" ? "/" : "/" + h);
   }
   const [tab, id] = location.pathname.replace(/^\/+|\/+$/g, "").split("/");
-  const name = TABS.includes(tab) ? tab : "live";
-  document.querySelectorAll("nav button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === name));
-  document.querySelectorAll("main>section").forEach((s) => (s.hidden = s.id !== name));
+  const name = PAGES[tab] ? tab : ALIASES[tab] || "live";
+  const page = PAGES[name];
+  document.querySelectorAll(".topnav a").forEach((a) => {
+    if (a.dataset.tab === page.nav) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  document.querySelectorAll("main>section").forEach((s) => {
+    const show = s.id === name;
+    if (show && s.hidden) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
+    s.hidden = !show;
+  });
+  $(".top").classList.remove("open");
+  $("#menu").setAttribute("aria-expanded", "false");
   hideTip();
-  if (TITLES[name]) document.title = TITLES[name];
-  ({ live: renderLive, incidents: () => renderIncidents(id && decodeURIComponent(id)), eval: renderEval, how: renderHow, health: renderHealth, usage: renderUsage })[name]();
+  document.title = page.title;
+  if (name === "incidents") renderIncidents(id && decodeURIComponent(id));
+  else page.render();
 }
 function go(path) {
-  if (path !== location.pathname) history.pushState(null, "", path);
+  if (path !== location.pathname + location.search) history.pushState(null, "", path);
   route();
   scrollTo(0, 0);
 }
-document.querySelectorAll("nav button").forEach((b) => (b.onclick = () => go(b.dataset.tab === "live" ? "/" : "/" + b.dataset.tab)));
+$("#menu").onclick = () => {
+  const open = $(".top").classList.toggle("open");
+  $("#menu").setAttribute("aria-expanded", String(open));
+};
 document.addEventListener("click", (e) => {
   const a = e.target.closest?.("a[href]");
-  if (!a || a.target || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!a || a.target || a.hasAttribute("download") || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const u = new URL(a.href, location.href);
   if (u.origin !== location.origin || /^\/(api|static)\//.test(u.pathname)) return;
   e.preventDefault();
-  go(u.pathname);
+  go(u.pathname + u.search);
 });
 addEventListener("popstate", route);
 route();

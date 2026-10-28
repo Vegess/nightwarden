@@ -186,6 +186,12 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
             db.rollback()
             logger.exception("Daily rollup failed")
     check_backup(db, state, now)
+    try:
+        from app.services import reports
+        reports.maybe_send_digest(db, state, now)
+    except Exception:  # noqa: BLE001 — a digest must never break a poll
+        db.rollback()
+        logger.exception("Weekly digest failed")
     _state["last_ok"] = now.isoformat()
     if settings.heartbeat_url:
         try:

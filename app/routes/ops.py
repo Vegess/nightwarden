@@ -15,7 +15,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import Alert, Decision, Event, PollerState, Snapshot
+from app.db.models import Alert, DailyStat, Decision, Event, PollerState, Snapshot
 from app.db.session import get_db
 from app.services import notify
 
@@ -200,6 +200,35 @@ def neon_usage() -> dict:
     return _cached("neon", 3600, _neon_fetch)
 
 
+def _iso(dt):
+    return _utc(dt).isoformat() if dt else None
+
+
+def poll_counts(db: Session, now: datetime) -> dict:
+    """Polls today and month to date, and how many were expected.
+
+    Month to date used to count snapshots, which a 7-day retention had already deleted, so it showed
+    7 x 144 = 1,008 whatever the date. Finished days now come from daily_stats (kept forever) and only
+    today from snapshots. Expected polls run from the 1st of the month, or from the first poll ever
+    recorded if that is later.
+    """
+    today = _day_start(now)
+    month = today.replace(day=1)
+    count_today = db.scalar(select(func.count()).select_from(Snapshot).where(
+        Snapshot.service == settings.target_name, Snapshot.ts >= today)) or 0
+    finished = db.scalar(select(func.sum(DailyStat.polls)).where(
+        DailyStat.date >= month.date(), DailyStat.date < today.date())) or 0
+    firsts = [db.scalar(select(func.min(DailyStat.date)).where(DailyStat.polls > 0)),
+              db.scalar(select(func.min(Snapshot.ts)).where(Snapshot.service == settings.target_name))]
+    starts = [datetime.combine(f, dtime.min, tzinfo=timezone.utc) if not isinstance(f, datetime) else _utc(f)
+              for f in firsts if f is not None]
+    first = min(starts) if starts else None
+    since = max(month, first) if first else None
+    expected = int((now - since).total_seconds() // 600) + 1 if since else 0
+    return {"today": count_today, "month": int(finished) + count_today, "month_limit": expected,
+            "expected_since": _iso(since)}
+
+
 def build_usage(db: Session, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     today = _day_start(now)
@@ -214,9 +243,7 @@ def build_usage(db: Session, now: datetime | None = None) -> dict:
     used_today = _tokens_since(db, today)
     left = max(0, limit - used_today["total"])
 
-    def polls(since):
-        return db.scalar(select(func.count()).select_from(Snapshot).where(
-            Snapshot.service == settings.target_name, Snapshot.ts >= since)) or 0
+    polls = poll_counts(db, now)
 
     def emails(since):
         return dict(db.execute(select(Alert.ok, func.count()).where(Alert.channel == "email", Alert.ts >= since)
@@ -230,9 +257,9 @@ def build_usage(db: Session, now: datetime | None = None) -> dict:
             "mean_tokens_per_triage": mean, "triage_sample": len(triages),
             "triages_left_today": math.floor(left / mean) if mean else None,
         },
-        "polls": {"limit_per_day": POLLS_PER_DAY, "today": polls(today), "month": polls(month),
-                  "month_limit": POLLS_PER_DAY * days},
+        "polls": {"limit_per_day": POLLS_PER_DAY, **polls},
         "emails": {"limit_per_day": EMAILS_PER_DAY,
+                   "tracking_since": _iso(db.scalar(select(func.min(Alert.ts)))),
                    "today": e_today.get(True, 0), "today_failed": e_today.get(False, 0),
                    "month": e_month.get(True, 0), "month_failed": e_month.get(False, 0),
                    "month_limit": EMAILS_PER_DAY * days},

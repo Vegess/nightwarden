@@ -128,10 +128,13 @@ decisions are in [docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
 
 ## API
 
-Public, read-only: `GET /health`, `/api/status`, `/api/incidents`, `/api/incidents/{id}`, `/api/decisions`,
+Public, read-only: `GET /api/performance?days=7|30|365` (how the agent decides, including how often it disagrees
+with the shadow rules baseline recorded next to every live decision), `GET /api/reports?period=week|month|year&offset=0`
+(`&format=csv` for days), `GET /health`, `/api/status`, `/api/incidents`, `/api/incidents/{id}`, `/api/decisions`,
 `/api/eval`, `/api/health/checks` (self-checks, cached 60 s), `/api/usage` (free-tier budgets, cached 5 min).
 The first poll after midnight UTC writes yesterday's `daily_stats` row (backfilling missed days); snapshots are
-kept 30 days and deleted only once their day is rolled up.
+kept 30 days and deleted only once their day is rolled up. Reports read `daily_stats`; on the first poll after
+Monday 03:30 UTC the webhook gets last week's digest, once (the week is recorded on `poller_state`).
 
 Triage tries Groq, then the backup AI (`BACKUP_LLM_PROVIDER`, Gemini by default, when `BACKUP_LLM_API_KEY` is set),
 then the rules. `decisions.provider` records which one decided; anything not decided by Groq is `degraded`.
