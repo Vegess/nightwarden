@@ -106,6 +106,8 @@ def run(db: Session, event: Event, evidence: Evidence, client=None) -> Decision:
         tool_calls=json.dumps(result.tool_calls, default=str), rounds=result.rounds,
         tokens_in=result.tokens_in, tokens_out=result.tokens_out, latency_ms=result.latency_ms, degraded=degraded,
         provider=used,
+        # Shadow baseline: what the rules alone would have said (no model call, no alert), for /performance.
+        rules_action=rules_triage(payload) if event.source != "eval" else None,
     )
     db.add(decision)
     db.commit()

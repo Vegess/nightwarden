@@ -96,6 +96,7 @@ class Decision(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     degraded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     provider: Mapped[str | None] = mapped_column(String(12), nullable=True)  # groq | gemini | anthropic | rules
+    rules_action: Mapped[str | None] = mapped_column(String(10), nullable=True)  # shadow baseline: what the rules said
     # Evaluation only.
     scenario: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expected_action: Mapped[str | None] = mapped_column(String(10), nullable=True)
@@ -132,6 +133,12 @@ class DailyStat(Base):
     pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     emails_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     emails_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Version 2 (reports): severity and kind breakdowns, time to resolve, degraded decisions.
+    incidents_by_severity: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    events_by_kind: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    resolve_s_sum: Mapped[int] = mapped_column(Integer, nullable=False, default=0)   # over incidents_resolved
+    decisions_degraded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -150,3 +157,4 @@ class PollerState(Base):
     backup_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     backup_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     backup_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    digest_week: Mapped[str | None] = mapped_column(String(10), nullable=True)       # ISO week of the last digest

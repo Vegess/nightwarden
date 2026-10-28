@@ -25,8 +25,10 @@ HEADERS = {
 # read a minute instead of N. Anything sent with credentials, any write and any other /api path: no-store.
 SHARED = "public, s-maxage=60, stale-while-revalidate=300"
 CACHE = {"/api/usage": "public, s-maxage=300, stale-while-revalidate=300"}
-PUBLIC_API = ("/api/status", "/api/stats", "/api/decisions", "/api/incidents", "/api/health/checks", "/api/eval")
-PAGES = ("/", "/live", "/incidents", "/eval", "/how", "/usage", "/health", "/robots.txt")
+PUBLIC_API = ("/api/status", "/api/stats", "/api/decisions", "/api/incidents", "/api/health/checks", "/api/eval",
+              "/api/performance", "/api/reports")
+PAGES = ("/", "/live", "/incidents", "/eval", "/how", "/usage", "/health", "/robots.txt", "/insights", "/performance",
+         "/reports", "/about")
 
 
 def cache_control(request: Request, response) -> str | None:
