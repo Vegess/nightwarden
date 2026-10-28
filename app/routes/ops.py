@@ -1,7 +1,7 @@
 """Self-checks and free-tier usage for the /health and /usage pages.
 
 Both read only what Nightwarden already stores (no extra polling of the
-target, no Groq calls) and are cached: checks 60 s, usage 5 min.
+target, no Groq calls) and are cached: checks 60 s, usage 5 min, Neon's API 1 h.
 """
 import math
 import os
@@ -86,7 +86,8 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
         out.append(_check("Database round trip", "fail", f"database unreachable ({type(exc).__name__})"))
         return {"overall": "fail", "checked_at": now.isoformat(), "checks": out}
 
-    latest = db.scalar(select(Snapshot).where(Snapshot.service == settings.target_name).order_by(Snapshot.ts.desc()))
+    latest = db.execute(select(Snapshot.ts, Snapshot.ok, Snapshot.error).where(Snapshot.service == settings.target_name)
+                        .order_by(Snapshot.ts.desc()).limit(1)).first()
     if latest is None:
         out.append(_check("Poll freshness", "fail", "no poll recorded yet"))
         out.append(_check("Target reachable", "warn", "no poll recorded yet"))
@@ -101,9 +102,9 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
     if not settings.groq_api_key:
         out.append(_check("Groq usable", "fail", "GROQ_API_KEY not set: triage is rules-only"))
     else:
-        last = db.scalar(select(Decision).join(Event, Event.id == Decision.event_id)
-                         .where(Event.source != "eval", Decision.ts >= now - timedelta(hours=24))
-                         .order_by(Decision.ts.desc()))
+        last = db.execute(select(Decision.degraded).join(Event, Event.id == Decision.event_id)
+                          .where(Event.source != "eval", Decision.ts >= now - timedelta(hours=24))
+                          .order_by(Decision.ts.desc()).limit(1)).first()
         if last is None:
             out.append(_check("Groq usable", "pass", "key set; no live triage in the last 24 h"))
         elif last.degraded:
@@ -131,6 +132,16 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
     out.append(_check("Groq tokens today", "pass" if share < 0.8 else "warn" if share < 1 else "fail",
                       f"{used:,} of {limit:,} ({share:.0%}); warn at 80 %"))
 
+    neon = neon_usage()
+    if not neon["configured"]:
+        out.append(_check("Neon network transfer", "warn", neon["detail"]))
+    elif neon.get("error"):
+        out.append(_check("Neon network transfer", "warn", neon["error"]))
+    else:
+        t = neon["transfer"]
+        out.append(_check("Neon network transfer", transfer_status(t["share"]),
+                          f"{t['gb']:.2f} of {t['limit_gb']:g} GB this month ({t['share']:.0%}); warn at 70 %, fail at 90 %"))
+
     overall = max((c["status"] for c in out), key=RANK.__getitem__)
     return {"overall": overall, "checked_at": now.isoformat(), "checks": out}
 
@@ -141,7 +152,11 @@ def health_checks(request: Request, db: Session = Depends(get_db)):
     return _cached(f"checks:{host}", 60, lambda: build_checks(db, host))
 
 
-def _neon() -> dict:
+def transfer_status(share: float) -> str:
+    return "fail" if share >= 0.9 else "warn" if share >= 0.7 else "pass"
+
+
+def _neon_fetch() -> dict:
     if not (settings.neon_api_key and settings.neon_project_id):
         return {"configured": False, "detail": "not configured (set NEON_API_KEY and NEON_PROJECT_ID)"}
     try:
@@ -152,8 +167,16 @@ def _neon() -> dict:
     except (httpx.HTTPError, ValueError) as exc:
         status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
         return {"configured": True, "error": f"Neon API failed ({status})", "limit": settings.neon_cu_hours_limit}
+    limit_gb = settings.neon_transfer_limit_gb
+    gb = (p.get("data_transfer_bytes") or 0) / 1e9
     return {"configured": True, "cu_hours": round((p.get("compute_time_seconds") or 0) / 3600, 2),
-            "limit": settings.neon_cu_hours_limit, "period_start": p.get("consumption_period_start")}
+            "limit": settings.neon_cu_hours_limit, "period_start": p.get("consumption_period_start"),
+            "transfer": {"gb": round(gb, 3), "limit_gb": limit_gb, "share": round(gb / limit_gb, 4) if limit_gb else 1.0}}
+
+
+def neon_usage() -> dict:
+    """Neon's consumption for the billing month; one API call an hour at most (both pages share it)."""
+    return _cached("neon", 3600, _neon_fetch)
 
 
 def build_usage(db: Session, now: datetime | None = None) -> dict:
@@ -192,7 +215,7 @@ def build_usage(db: Session, now: datetime | None = None) -> dict:
                    "today": e_today.get(True, 0), "today_failed": e_today.get(False, 0),
                    "month": e_month.get(True, 0), "month_failed": e_month.get(False, 0),
                    "month_limit": EMAILS_PER_DAY * days},
-        "neon": _neon(),
+        "neon": neon_usage(),
     }
 
 

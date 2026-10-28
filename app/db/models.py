@@ -7,6 +7,9 @@ decisions  one row per triage run: the audit trail AND the evaluation table
 incidents  what a human sees: opened by page/notify/watch decisions
 alerts     one row per alert delivery attempt (webhook or email), written by notify.alert
 daily_stats one row per UTC day: the rollup that outlives the 30-day snapshot retention
+poller_state one small row per watched service: what each poll needs from the past, so it
+           never re-reads snapshots (previous reading, recent deltas, typical traffic,
+           consecutive failures, the last day rolled up)
 """
 import uuid
 from datetime import date, datetime, timezone
@@ -129,3 +132,16 @@ class DailyStat(Base):
     emails_sent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     emails_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PollerState(Base):
+    __tablename__ = "poller_state"
+
+    service: Mapped[str] = mapped_column(String(40), primary_key=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_ok_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_raw: Mapped[str] = mapped_column(Text, nullable=False, default="{}")      # trimmed, see poller.KEEP
+    deltas: Mapped[str] = mapped_column(Text, nullable=False, default="[]")        # [[epoch_s, delta], ...] last 5.5 min
+    traffic: Mapped[str] = mapped_column(Text, nullable=False, default="[]")       # [[10-min slot, requests_5m], ...] 24 h
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)       # consecutive failed polls
+    rolled_through: Mapped[date | None] = mapped_column(Date, nullable=True)      # last day in daily_stats

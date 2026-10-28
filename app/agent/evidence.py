@@ -44,9 +44,10 @@ class LiveEvidence:
         return self._fetch_logs(since=since, level=level, contains=contains, limit=40)
 
     def metric_series(self, metric, minutes):
-        rows = self.db.scalars(
-            select(Snapshot).where(Snapshot.service == self.service, Snapshot.ok.is_(True),
-                                   Snapshot.ts >= self.now - timedelta(minutes=minutes)).order_by(Snapshot.ts)
+        rows = self.db.execute(
+            select(Snapshot.ts, Snapshot.derived).where(Snapshot.service == self.service, Snapshot.ok.is_(True),
+                                                        Snapshot.ts >= self.now - timedelta(minutes=minutes))
+            .order_by(Snapshot.ts)
         ).all()
         out = []
         for r in rows:
@@ -56,8 +57,8 @@ class LiveEvidence:
         return out[-30:]  # enough to see a trend, small enough for the context
 
     def deploys(self, hours):
-        rows = self.db.scalars(
-            select(Deploy).where(Deploy.service == self.service, Deploy.ts >= self.now - timedelta(hours=hours))
+        rows = self.db.execute(
+            select(Deploy.ts, Deploy.commit_sha, Deploy.note).where(Deploy.service == self.service, Deploy.ts >= self.now - timedelta(hours=hours))
             .order_by(Deploy.ts.desc())
         ).all()
         return [{"minutes_ago": int((self.now - _utc(d.ts)).total_seconds() // 60), "commit": (d.commit_sha or "")[:10],
@@ -65,9 +66,10 @@ class LiveEvidence:
 
     def past_incidents(self, query, limit):
         words = [w for w in query.lower().split() if len(w) > 2][:6]
-        q = select(Incident).where(Incident.service == self.service).order_by(Incident.opened_at.desc())
+        q = (select(Incident.opened_at, Incident.kind, Incident.severity, Incident.status, Incident.summary,
+                    Incident.occurrences).where(Incident.service == self.service).order_by(Incident.opened_at.desc()))
         if words:
             q = q.where(or_(*[Incident.summary.ilike(f"%{w}%") for w in words], *[Incident.kind.ilike(f"%{w}%") for w in words]))
         return [{"days_ago": round((self.now - _utc(i.opened_at)).total_seconds() / 86400, 1), "kind": i.kind,
                  "severity": i.severity, "status": i.status, "summary": i.summary, "occurrences": i.occurrences}
-                for i in self.db.scalars(q.limit(limit)).all()]
+                for i in self.db.execute(q.limit(limit)).all()]

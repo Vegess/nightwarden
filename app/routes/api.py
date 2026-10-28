@@ -91,16 +91,20 @@ def _incident_out(i: Incident) -> dict:
 @router.get("/status")
 def status(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc)
-    snaps = db.scalars(select(Snapshot).where(Snapshot.service == settings.target_name,
-                                              Snapshot.ts >= now - timedelta(minutes=90)).order_by(Snapshot.ts)).all()
+    snaps = db.execute(select(Snapshot.ts, Snapshot.ok, Snapshot.error, Snapshot.derived)
+                       .where(Snapshot.service == settings.target_name, Snapshot.ts >= now - timedelta(minutes=90))
+                       .order_by(Snapshot.ts)).all()
     latest = snaps[-1] if snaps else None
     last_ok = next((s for s in reversed(snaps) if s.ok), None)
     series = [{"ts": _iso(s.ts), **{k: json.loads(s.derived).get("window", {}).get(k)
                                     for k in ("requests_5m", "error_rate", "fallback_rate", "latency_p95_ms")}}
               for s in snaps if s.ok]
-    last_decision = db.scalar(select(Decision).join(Event, Event.id == Decision.event_id)
-                              .where(Event.source == "live").order_by(Decision.ts.desc()))
-    raw = json.loads(last_ok.raw) if last_ok else {}
+    last_degraded = db.scalar(select(Decision.degraded).join(Event, Event.id == Decision.event_id)
+                              .where(Event.source == "live").order_by(Decision.ts.desc()).limit(1))
+    # The newest reading's raw only (commit, model, uptime), even when it is older than 90 minutes.
+    raw = db.scalar(select(Snapshot.raw).where(Snapshot.service == settings.target_name, Snapshot.ok.is_(True))
+                    .order_by(Snapshot.ts.desc()).limit(1)) if last_ok else None
+    raw = json.loads(raw) if raw else {}
     return {
         "service": settings.target_name,
         "target_host": urlparse(settings.target_url).hostname,
@@ -109,7 +113,7 @@ def status(db: Session = Depends(get_db)):
         "last_error": latest.error if latest and not latest.ok else None,
         "poller": poller.state(),
         "ai_triage": "ready" if settings.groq_api_key else "off (no key): rules only",
-        "last_triage_degraded": bool(last_decision and last_decision.degraded),
+        "last_triage_degraded": bool(last_degraded),
         "email_alerts": "on" if notify.email_configured() else "off",
         "window": json.loads(last_ok.derived).get("window") if last_ok else None,
         "commit": raw.get("commit"), "llm_model": raw.get("llm_model"),
@@ -117,7 +121,8 @@ def status(db: Session = Depends(get_db)):
         "open_incidents": db.scalar(select(func.count()).select_from(Incident).where(Incident.status == "open")) or 0,
         "series": series[-90:],
         "deploys": [{"ts": _iso(d.ts), "commit": (d.commit_sha or "")[:10], "note": d.note}
-                    for d in db.scalars(select(Deploy).order_by(Deploy.ts.desc()).limit(5))],
+                    for d in db.execute(select(Deploy.ts, Deploy.commit_sha, Deploy.note)
+                                        .order_by(Deploy.ts.desc()).limit(5))],
     }
 
 
@@ -135,9 +140,9 @@ def stats(db: Session = Depends(get_db)):
         return {"pct": round(counts.get(True, 0) / total, 4) if total else None, "polls": total}
 
     week = now - timedelta(days=7)
-    incidents_7d = db.scalars(select(Incident).where(Incident.opened_at >= week)).all()
-    resolved = db.scalars(select(Incident).where(Incident.closed_at.is_not(None),
-                                                 Incident.opened_at >= now - timedelta(days=30))).all()
+    incidents_7d = db.execute(select(Incident.severity, Incident.status).where(Incident.opened_at >= week)).all()
+    resolved = db.execute(select(Incident.opened_at, Incident.closed_at).where(
+        Incident.closed_at.is_not(None), Incident.opened_at >= now - timedelta(days=30))).all()
     durations = [(_aware(i.closed_at) - _aware(i.opened_at)).total_seconds() for i in resolved]
     by_action = dict(db.execute(select(Decision.action, func.count()).join(Event, Event.id == Decision.event_id)
                                 .where(Event.source != "eval", Decision.ts >= week).group_by(Decision.action)).all())
@@ -174,11 +179,30 @@ def incident(incident_id: str, db: Session = Depends(get_db), full: bool = Depen
     return {**_incident_out(inc), "decisions": [_decision_out(d, e, full) for d, e in rows]}
 
 
+def _count(col, needle: str):
+    """Occurrences of `needle` in a text column, computed in the database (SQLite and Postgres)."""
+    return (func.length(col) - func.length(func.replace(col, needle, ""))) / len(needle)
+
+
 @router.get("/decisions")
-def decisions(limit: int = 30, db: Session = Depends(get_db), full: bool = Depends(is_admin)):
-    rows = db.execute(select(Decision, Event).join(Event, Event.id == Decision.event_id)
-                      .where(Event.source != "eval").order_by(Decision.ts.desc()).limit(max(1, min(limit, 100)))).all()
-    return [_decision_out(d, e, full) for d, e in rows]
+def decisions(limit: int = 30, brief: bool = False, db: Session = Depends(get_db), full: bool = Depends(is_admin)):
+    """`brief=1` (the Live page) leaves out the rationale, the trace and the event metrics, the bulky
+    columns, and returns `tool_count` instead."""
+    def q(*cols):
+        return (select(*cols).join(Event, Event.id == Decision.event_id).where(Event.source != "eval")
+                .order_by(Decision.ts.desc()).limit(max(1, min(limit, 100))))
+    if not brief:
+        rows = db.execute(q(Decision, Event)).all()
+        return [_decision_out(d, e, full) for d, e in rows]
+    tool_count = _count(Decision.tool_calls, '"tool": ') - _count(Decision.tool_calls, '"tool": "decide"')
+    rows = db.execute(q(
+        Decision.id, Decision.ts, Decision.triager, Decision.action, Decision.confidence, Decision.summary,
+        Decision.latency_ms, Decision.degraded, Decision.incident_id, Decision.tokens_in, Decision.tokens_out,
+        Decision.rounds, Event.kind, Event.detail, tool_count.label("tool_count"))).all()
+    return [{"id": r.id, "ts": _iso(r.ts), "triager": r.triager, "action": r.action, "confidence": r.confidence,
+             "summary": r.summary, "rounds": r.rounds, "latency_ms": r.latency_ms, "tokens": r.tokens_in + r.tokens_out,
+             "degraded": r.degraded, "decided_by": decided_by(r), "incident_id": r.incident_id,
+             "tool_count": int(r.tool_count or 0), "event": {"kind": r.kind, "detail": r.detail}} for r in rows]
 
 
 @router.get("/eval")
@@ -204,8 +228,9 @@ def require_cron(authorization: str | None = Header(default=None)) -> None:
 def cron_poll(db: Session = Depends(get_db)):
     """Serverless mode: one poll cycle per call (an external scheduler calls this every 10 min)."""
     fired = poller.poll_once(db)
-    latest = db.scalar(select(Snapshot).where(Snapshot.service == settings.target_name).order_by(Snapshot.ts.desc()))
-    return {"reachable": bool(latest and latest.ok), "fired": [e.kind for e in fired]}
+    ok = db.scalar(select(Snapshot.ok).where(Snapshot.service == settings.target_name)
+                   .order_by(Snapshot.ts.desc()).limit(1))
+    return {"reachable": bool(ok), "fired": [e.kind for e in fired]}
 
 
 class DeployIn(BaseModel):
