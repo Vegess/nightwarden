@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-10-28T09:21:46.974506+00:00",
+ "generated_at": "2026-11-03T13:34:29.242885+00:00",
  "model": "openai/gpt-oss-120b",
  "orchestrator": "langgraph",
  "cases": [
@@ -628,7 +628,24 @@
    "silent": true,
    "kind": "traffic_drop",
    "expected": "notify",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "search_past_incidents",
+    "get_recent_logs",
+    "decide"
+   ],
+   "tokens": 8829,
+   "latency_ms": 6903,
+   "summary": "Severe traffic drop and high latency detected; page on-call for immediate investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 7,
@@ -646,7 +663,23 @@
    "silent": true,
    "kind": "fallback_spike",
    "expected": "page",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_recent_logs",
+    "decide"
+   ],
+   "tokens": 6720,
+   "latency_ms": 42790,
+   "summary": "High fallback usage (67%) and latency spikes due to LLM errors; page on-call now.",
+   "inconclusive": false
   },
   {
    "scenario": 7,
@@ -655,7 +688,24 @@
    "silent": true,
    "kind": "fallback_spike",
    "expected": "page",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_metrics",
+    "get_recent_logs",
+    "decide"
+   ],
+   "tokens": 8472,
+   "latency_ms": 40619,
+   "summary": "Fallback spike to 84% with LLM errors and high latency \u2013 page on\u2011call.",
+   "inconclusive": false
   },
   {
    "scenario": 7,
@@ -664,7 +714,23 @@
    "silent": true,
    "kind": "fallback_spike",
    "expected": "page",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "high",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 7310,
+   "latency_ms": 43102,
+   "summary": "Fallback rate spiked to 64% with LLM errors; immediate human attention needed.",
+   "inconclusive": false
   },
   {
    "scenario": 7,
@@ -673,7 +739,23 @@
    "silent": true,
    "kind": "fallback_spike",
    "expected": "page",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 6999,
+   "latency_ms": 27016,
+   "summary": "Fallback usage spiked to 70% with high latency; notify on\u2011call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 8,
@@ -691,7 +773,22 @@
    "silent": false,
    "kind": "status_storm",
    "expected": "notify",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "decide"
+   ],
+   "tokens": 6328,
+   "latency_ms": 35266,
+   "summary": "High 429 rate limit responses detected; likely legitimate throttling\u2014notify ops to review limits.",
+   "inconclusive": false
   },
   {
    "scenario": 8,
@@ -700,7 +797,23 @@
    "silent": false,
    "kind": "status_storm",
    "expected": "notify",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "decide"
+   ],
+   "tokens": 8107,
+   "latency_ms": 25968,
+   "summary": "High 429 rate after recent deploy; likely rate\u2011limit issue \u2013 notify engineers.",
+   "inconclusive": false
   },
   {
    "scenario": 8,
@@ -709,7 +822,24 @@
    "silent": false,
    "kind": "status_storm",
    "expected": "notify",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_metrics",
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "decide"
+   ],
+   "tokens": 9925,
+   "latency_ms": 40411,
+   "summary": "High 429 rate and latency spike; rate limiter warnings indicate user impact \u2013 page now.",
+   "inconclusive": false
   },
   {
    "scenario": 8,
@@ -718,7 +848,21 @@
    "silent": false,
    "kind": "status_storm",
    "expected": "notify",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 3,
+   "tool_calls": 2,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "decide"
+   ],
+   "tokens": 4622,
+   "latency_ms": 13928,
+   "summary": "High 429 rate\u2011limit responses after recent deploy; notify on\u2011call team.",
+   "inconclusive": false
   },
   {
    "scenario": 9,
@@ -736,7 +880,24 @@
    "silent": false,
    "kind": "traffic_spike",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_recent_logs",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 8106,
+   "latency_ms": 24209,
+   "summary": "Traffic spike with high latency but low errors; notify on-call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 9,
@@ -745,7 +906,23 @@
    "silent": false,
    "kind": "traffic_spike",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "agent": "notify",
+   "orchestrator": "langgraph",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_recent_logs",
+    "decide"
+   ],
+   "tokens": 7743,
+   "latency_ms": 14676,
+   "summary": "Traffic spike (3.77\u00d7) with high latency but low errors; notify ops for review.",
+   "inconclusive": false
   },
   {
    "scenario": 9,
@@ -754,7 +931,23 @@
    "silent": false,
    "kind": "traffic_spike",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 6898,
+   "latency_ms": 22874,
+   "summary": "Traffic spike (\u22485\u00d7) causing high latency; no errors logged. Notify ops to monitor.",
+   "inconclusive": false
   },
   {
    "scenario": 9,
@@ -763,7 +956,24 @@
    "silent": false,
    "kind": "traffic_spike",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_recent_logs",
+    "search_past_incidents",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 7883,
+   "latency_ms": 13837,
+   "summary": "Traffic spike with high latency on citebase; notify on\u2011call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 10,
@@ -781,7 +991,24 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "suppress",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_recent_logs",
+    "get_metrics",
+    "get_deploy_history",
+    "search_past_incidents",
+    "decide"
+   ],
+   "tokens": 9018,
+   "latency_ms": 37727,
+   "summary": "DB OperationalError caused a brief 5xx spike (7%); notify on-call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 10,
@@ -790,7 +1017,24 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "suppress",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "watch",
+   "confidence": "medium",
+   "rounds": 6,
+   "tool_calls": 5,
+   "tools": [
+    "get_recent_logs",
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "get_recent_logs",
+    "decide"
+   ],
+   "tokens": 8864,
+   "latency_ms": 41080,
+   "summary": "Isolated DB connection error observed; monitor for recurrence before paging.",
+   "inconclusive": false
   },
   {
    "scenario": 10,
