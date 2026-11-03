@@ -1,0 +1,78 @@
+name: Eval daily batch
+# One resumable loop-vs-LangGraph eval batch a day for PR #8, after Groq's free-tier daily cap
+# resets. It runs the PR branch's own eval code, skips cases already scored in the committed
+# eval/results-*.json, spends at most 120K Groq tokens across both orchestrators (same model for
+# both; the eval passes the Groq client in directly, so the backup provider is never used) and
+# pushes the updated results back to the branch. Disable it once all 96 held-out cases are scored.
+on:
+  schedule:
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: eval-daily
+  cancel-in-progress: false
+
+env:
+  BRANCH: sprint-ai-backup
+  MODEL: openai/gpt-oss-120b
+  TOKEN_BUDGET: "120000"
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Cases left
+        id: left
+        run: |
+          left=$(python - <<'PY'
+          import json
+          n = 0
+          for o in ("loop", "langgraph"):
+              try:
+                  cases = json.load(open(f"eval/results-{o}.json"))["cases"]
+              except FileNotFoundError:
+                  n += 48; continue
+              n += sum(1 for r in cases if r["rep"] in (1, 2, 3, 4) and not r.get("agent"))
+          print(n)
+          PY
+          )
+          echo "left=$left" >> "$GITHUB_OUTPUT"
+          echo "Held-out cases left: $left of 96" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run one batch (both orchestrators share the budget)
+        if: steps.left.outputs.left != '0'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ env.MODEL }}
+          BACKUP_LLM_API_KEY: ""
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then echo "::error::Repository secret GROQ_API_KEY is not set"; exit 1; fi
+          status=0
+          for o in loop langgraph; do
+            echo "::group::$o"
+            python -m eval.run_eval --agent --orchestrator "$o" --out "eval/results-$o.json" --reps 5 --from-rep 1 \
+              --pause 8 --model "$MODEL" --token-budget "$TOKEN_BUDGET" --budget-file "$RUNNER_TEMP/spent" || status=1
+            echo "::endgroup::"
+          done
+          python -m eval.compare | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - name: Push the results back to the PR branch (also after a failed run: keep what was scored)
+        if: always() && steps.left.outputs.left != '0'
+        run: |
+          git add eval/results-loop.json eval/results-langgraph.json
+          if git diff --cached --quiet; then echo "No new cases scored"; exit 0; fi
+          scored=$(python -c "import json; print(sum(1 for o in ('loop','langgraph') for r in json.load(open(f'eval/results-{o}.json'))['cases'] if r['rep'] in (1,2,3,4) and r.get('agent')))")
+          git -c user.name="Anirudh" -c user.email="dev@nightwarden.local" commit -m "Eval: $scored/96 held-out cases scored (daily batch)"
+          git push origin "HEAD:$BRANCH"
