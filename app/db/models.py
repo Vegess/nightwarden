@@ -49,7 +49,7 @@ class Event(Base):
     kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     detail: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     metrics: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    source: Mapped[str] = mapped_column(String(20), nullable=False, default="live")  # live | eval | manual
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="live")  # live | eval | manual | info (timeline only, never triaged)
 
 
 class Deploy(Base):

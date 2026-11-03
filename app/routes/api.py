@@ -123,6 +123,12 @@ def status(db: Session = Depends(get_db)):
         "deploys": [{"ts": _iso(d.ts), "commit": (d.commit_sha or "")[:10], "note": d.note}
                     for d in db.execute(select(Deploy.ts, Deploy.commit_sha, Deploy.note)
                                         .order_by(Deploy.ts.desc()).limit(5))],
+        # Info events (idle restarts): shown on the Live timeline, never triaged.
+        "timeline": [{"ts": _iso(e.ts), "kind": e.kind, "detail": e.detail}
+                     for e in db.execute(select(Event.ts, Event.kind, Event.detail)
+                                         .where(Event.service == settings.target_name, Event.source == "info",
+                                                Event.ts >= now - timedelta(days=7))
+                                         .order_by(Event.ts.desc()).limit(5))],
     }
 
 
