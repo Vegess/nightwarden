@@ -68,7 +68,7 @@ jobs:
           done
           python -m eval.compare | tee -a "$GITHUB_STEP_SUMMARY"
           exit $status
-      - name: Push the results back to the PR branch (also after a failed run: keep what was scored)
+      - name: Push the results back to the PR branch (also after a failed run, to keep what was scored)
         if: always() && steps.left.outputs.left != '0'
         run: |
           git add eval/results-loop.json eval/results-langgraph.json
