@@ -208,8 +208,9 @@ def check_backup(db: Session, state: PollerState, now: datetime) -> None:
     if backup is None:
         return
     every = BACKUP_CHECK_EVERY if state.backup_error is None else BACKUP_RETRY_AFTER
-    if state.backup_checked_at and now - _utc(state.backup_checked_at) < every:
-        return
+    stale = state.backup_error is not None and not state.backup_error.startswith(f"{backup.model}:")
+    if state.backup_checked_at and now - _utc(state.backup_checked_at) < every and not stale:
+        return  # (a failure recorded for another model, e.g. before a model change, is retested at once)
     ok, error = providers.ping(backup)
     state.backup_checked_at, state.backup_error = now, error
     if ok:

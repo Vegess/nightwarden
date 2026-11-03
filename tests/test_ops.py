@@ -198,3 +198,72 @@ def test_migrations_reach_head_and_match_the_models(tmp_path, monkeypatch):
     command.downgrade(Config("alembic.ini"), "0001_initial")
     assert cols["poller_state"] == {c.name for c in PollerState.__table__.columns}
     assert cols["decisions"] == {c.name for c in Decision.__table__.columns}
+
+
+def _neon_reply(monkeypatch, replies):
+    from app.routes import ops
+    monkeypatch.setattr(ops.settings, "neon_api_key", "k")
+    monkeypatch.setattr(ops.settings, "neon_project_id", "p")
+
+    def get(url, **kw):
+        r = replies.pop(0)
+        return r if isinstance(r, httpx.Response) else httpx.Response(200, request=httpx.Request("GET", url), json={
+            "project": {"data_transfer_bytes": r[0], "compute_time_seconds": 0, "consumption_period_start": r[1]}})
+    monkeypatch.setattr(ops.httpx, "get", get)
+
+
+def _neon_check(db, now):
+    from app.routes import ops
+    ops._cache.clear()
+    checks = ops.build_checks(db, "testserver", now=now)["checks"]
+    return next(c for c in checks if c["name"] == "Neon network transfer")
+
+
+def test_neon_transfer_month_to_date_resets_on_the_first_utc(db, monkeypatch):
+    """Neon's counter kept October's 4.6 GB into November (its period began in September): fail on Nov 3.
+    Month to date now subtracts the last counter seen in October."""
+    oct31, nov3 = datetime(2026, 10, 31, 23, 50, tzinfo=timezone.utc), datetime(2026, 11, 3, 9, 0, tzinfo=timezone.utc)
+    db.add(PollerState(service="citebase"))
+    db.commit()
+    _neon_reply(monkeypatch, [(4_600_000_000, "2026-09-15T00:00:00Z"), (4_750_000_000, "2026-09-15T00:00:00Z"),
+                              (5_000_000_000, "2026-09-15T00:00:00Z"), (100_000_000, "2026-11-20T00:00:00Z")])
+    _neon_check(db, oct31)  # first reading ever: the base is this counter
+    c = _neon_check(db, nov3)
+    assert c["status"] == "pass" and c["detail"].startswith("0.15 of 5 GB")  # 4.75 - 4.60 (Oct 31's counter)
+    st = db.get(PollerState, "citebase")
+    assert (st.neon_month, st.neon_transfer_base, st.neon_transfer_last) == ("2026-11", 4_600_000_000, 4_750_000_000)
+    assert _neon_check(db, nov3 + timedelta(days=1))["detail"].startswith("0.40 of 5 GB")
+    # Neon's own period began this month: its counter is month to date as it stands.
+    assert _neon_check(db, datetime(2026, 11, 21, tzinfo=timezone.utc))["detail"].startswith("0.10 of 5 GB")
+
+
+def test_neon_counter_reset_mid_month_carries_what_was_counted(db, monkeypatch):
+    from app.routes import ops
+    db.add(PollerState(service="citebase", neon_month="2026-11", neon_transfer_base=1_000, neon_transfer_last=3_000))
+    db.commit()
+    now = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    assert ops.month_to_date_bytes(db, 500, "2026-10-15T00:00:00Z", now) == 2_500  # 2,000 before + 500 after
+    assert ops.month_to_date_bytes(db, 900, "2026-10-15T00:00:00Z", now) == 2_900
+
+
+@pytest.mark.parametrize("reply,reason", [
+    (httpx.Response(401, request=httpx.Request("GET", "https://x"), json={"message": "bad key"}), "HTTP 401"),
+    (httpx.Response(200, request=httpx.Request("GET", "https://x"), text="<html>"), "bad reply, JSONDecodeError"),
+    (httpx.Response(200, request=httpx.Request("GET", "https://x"), json={"projects": []}), "bad reply, KeyError"),
+])
+def test_neon_api_error_is_a_warning_with_a_short_reason(db, monkeypatch, reply, reason):
+    _neon_reply(monkeypatch, [reply])
+    c = _neon_check(db, NOW)
+    assert c == {"name": "Neon network transfer", "status": "warn", "detail": f"could not read Neon usage ({reason})"}
+
+
+def test_neon_timeout_is_a_warning(db, monkeypatch):
+    from app.routes import ops
+    monkeypatch.setattr(ops.settings, "neon_api_key", "k")
+    monkeypatch.setattr(ops.settings, "neon_project_id", "p")
+
+    def boom(url, **kw):
+        raise httpx.ReadTimeout("slow")
+    monkeypatch.setattr(ops.httpx, "get", boom)
+    c = _neon_check(db, NOW)
+    assert (c["status"], c["detail"]) == ("warn", "could not read Neon usage (timed out)")
