@@ -2,6 +2,8 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.collector import detectors, signals
 from app.db.models import Decision, Deploy, Event, Incident, Snapshot
 
@@ -134,3 +136,48 @@ def test_incidents_stay_open_while_down_and_quiet_ones_resolve(db, monkeypatch):
     _poll(db, raw(requests_total=150, chat_requests_total=41, fallback_total=9), t + timedelta(hours=7, minutes=30))
     db.expire_all()
     assert db.query(Incident).filter_by(kind="fallback_spike").one().status == "resolved"
+
+
+def _restart_setup(db, before_requests, before_errors=0):
+    """Two polls up (uptime 1000 s), then a restart 10 min later. `before_*` is the traffic in the window
+    just before the restart."""
+    t = datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc)
+    _poll(db, raw(uptime_s=1000), t)
+    _poll(db, raw(uptime_s=1600, requests_total=100 + before_requests,
+                  requests_by_status={"200": 100 + before_requests - before_errors, "500": before_errors}),
+          t + timedelta(minutes=10))
+    return t + timedelta(minutes=20)
+
+
+def test_idle_restart_is_an_info_event_not_triaged(db, monkeypatch, quiet_alerts):
+    from app.services import triage as triage_service
+    runs = []
+    monkeypatch.setattr(triage_service, "run", lambda *a, **kw: runs.append(a))
+    t = _restart_setup(db, before_requests=0)
+    fired = _poll(db, raw(uptime_s=30, started_at="t1", requests_total=0, requests_by_status={}), t)
+    assert fired == [] and runs == [] and db.query(Incident).count() == 0
+    e = db.query(Event).one()
+    assert (e.kind, e.source) == ("restart", "info") and "restarted while idle" in e.detail
+    assert not quiet_alerts
+    from tests.test_api import client
+    timeline = client(db, monkeypatch).get("/api/status").json()["timeline"]
+    assert [x["kind"] for x in timeline] == ["restart"] and "idle" in timeline[0]["detail"]
+    from app.collector import poller
+    assert poller.triage_pending(db, t + timedelta(minutes=1)) == 0  # never picked up later either
+
+
+@pytest.mark.parametrize("before_requests,before_errors,after_errors", [(12, 0, 0), (12, 3, 0), (0, 0, 2)])
+def test_restart_with_traffic_or_errors_still_triages(db, quiet_alerts, before_requests, before_errors, after_errors):
+    t = _restart_setup(db, before_requests, before_errors)
+    after = {"200": 5, "500": after_errors} if after_errors else {"200": 5}
+    fired = _poll(db, raw(uptime_s=30, started_at="t1", requests_total=5 + after_errors, requests_by_status=after), t)
+    assert "restart" in [e.kind for e in fired]
+    e = next(x for x in db.query(Event).all() if x.kind == "restart")
+    assert e.source == "live" and db.query(Decision).filter(Decision.event_id == e.id).count() == 1
+
+
+def test_restart_after_a_deploy_is_not_an_idle_restart():
+    from app.collector import detectors
+    assert not detectors.quiet_restart([{"requests": 0, "s5xx": 0}], {"s5xx": 0}, deployed=True)
+    assert not detectors.quiet_restart([], {"s5xx": 0}, deployed=False)  # nothing known about before
+    assert detectors.quiet_restart([{"requests": 0, "s5xx": 0}], {"requests": 1, "s5xx": 0}, deployed=False)

@@ -225,6 +225,16 @@ function signalsHtml(s) {
         { color: "var(--good)", fmt: (v) => Math.round(v) + " ms", threshold: 5000 }, "dashed line: 5 s alert threshold")}
     </div>`;
 }
+function timelineHtml(s) {
+  const items = [
+    ...(s.timeline || []).map((e) => ({ ts: e.ts, tag: "info", label: e.kind.replaceAll("_", " "), text: e.detail })),
+    ...(s.deploys || []).map((d) => ({ ts: d.ts, tag: "deploy", label: d.commit ? "commit " + d.commit.slice(0, 7) : "deploy", text: d.note || "" })),
+  ].sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, 6);
+  if (!items.length) return emptyCard("Nothing on the timeline", "Deploys and info events (such as restarts while idle, which are not triaged) appear here.");
+  return `<div class="list">${items.map((i) => `<div class="card decision"><div class="row">
+      <span class="pill plain">${esc(i.tag)}</span><strong>${esc(i.label)}</strong><span class="muted">${when(i.ts)}</span></div>
+      ${i.text ? `<div class="sub">${esc(i.text)}</div>` : ""}</div>`).join("")}</div>`;
+}
 async function renderLive() {
   const el = $("#live");
   if (!el.innerHTML) el.innerHTML = skeleton(1, 132) + "<h2>At a glance</h2>" + skeleton(4) + "<h2>Signals</h2>" + skeleton(4, 140);
@@ -236,6 +246,8 @@ async function renderLive() {
     ${st.status === "fulfilled" ? glanceHtml(st.value) : failCard("headline numbers", st.reason)}
     <h2>Signals · last 90 minutes</h2>
     ${s.status === "fulfilled" ? signalsHtml(s.value) : failCard("signals", s.reason)}
+    <h2>Timeline</h2>
+    ${s.status === "fulfilled" ? timelineHtml(s.value) : failCard("timeline", s.reason)}
     <h2>Recent decisions</h2>
     ${decisions.status !== "fulfilled" ? failCard("decisions", decisions.reason)
       : decisions.value.length ? `<div class="list">${decisions.value.map(decisionRow).join("")}</div>`
