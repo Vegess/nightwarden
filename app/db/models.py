@@ -14,7 +14,7 @@ poller_state one small row per watched service: what each poll needs from the pa
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -158,3 +158,7 @@ class PollerState(Base):
     backup_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     backup_error: Mapped[str | None] = mapped_column(String(200), nullable=True)
     digest_week: Mapped[str | None] = mapped_column(String(10), nullable=True)       # ISO week of the last digest
+    # Neon's counter only resets with its billing period; month to date (UTC) = counter - base.
+    neon_month: Mapped[str | None] = mapped_column(String(7), nullable=True)          # "YYYY-MM" the base belongs to
+    neon_transfer_base: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    neon_transfer_last: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

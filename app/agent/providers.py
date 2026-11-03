@@ -10,6 +10,7 @@ Errors keep `status_code` and `response.headers`, so the orchestrator's
 rate-limit handling and short_error work the same for every provider.
 """
 import json
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Callable
@@ -20,7 +21,9 @@ from app.agent.orchestrator import _client as groq_client, short_error
 from app.core.config import get_settings
 
 BACKUPS = ("gemini", "anthropic")
-DEFAULT_MODEL = {"gemini": "gemini-2.5-flash", "anthropic": "claude-haiku-5-5"}
+# Gemini by its rolling alias: pinned 2.x ids are shut down on a schedule (2.0 Flash first, then 2.5),
+# and a retired id answers 404, which left the backup "failing" with nothing changed on our side.
+DEFAULT_MODEL = {"gemini": "gemini-flash-latest", "anthropic": "claude-haiku-5-5"}
 LABEL = {"groq": "Groq", "gemini": "Gemini", "anthropic": "Anthropic"}
 
 
@@ -173,11 +176,32 @@ def _json_or_empty(arguments: str) -> dict:
         return {}
 
 
+def provider_message(exc: Exception, limit: int = 90) -> str | None:
+    """The provider's own one-line reason ("models/x is not found ...", "API key not valid ..."), trimmed.
+    Gemini answers [{"error": {...}}] or {"error": {...}}; Anthropic {"error": {"message": ...}}."""
+    response = getattr(exc, "response", None)
+    try:
+        data = response.json() if response is not None else None
+    except ValueError:
+        return None
+    if isinstance(data, list) and data:
+        data = data[0]
+    err = data.get("error") if isinstance(data, dict) else None
+    msg = err.get("message") if isinstance(err, dict) else None
+    if not isinstance(msg, str) or not msg.strip():
+        return None
+    msg = re.sub(r"\s+", " ", msg).strip()
+    msg = re.sub(r"AIza[0-9A-Za-z_-]{10,}|sk-[0-9A-Za-z_-]{10,}", "[key]", msg)
+    return msg if len(msg) <= limit else msg[:limit - 1].rstrip() + "…"
+
+
 def ping(provider: Provider) -> tuple[bool, str | None]:
-    """A 1-token call: is the backup reachable with this key? Returns (ok, short error)."""
+    """A 1-token call: is the backup reachable with this key and model? Returns (ok, short error)."""
     try:
         provider.make_client().chat.completions.create(
             model=provider.model, messages=[{"role": "user", "content": "ping"}], max_tokens=1)
         return True, None
     except Exception as exc:  # noqa: BLE001 — any failure is a failed check, said briefly
-        return False, short_error(exc, provider.label)
+        error = f"{provider.model}: {short_error(exc, provider.label)}"
+        detail = provider_message(exc)
+        return False, (f"{error}: {detail}" if detail else error)[:200]
