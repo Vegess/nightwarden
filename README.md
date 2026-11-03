@@ -60,7 +60,7 @@ rules, and 75% of the silent ones, where the rules caught none. Its weakness is 
 dismisses anything. On the 12 benign cases it chose *watch* 8 times and *notify* 4 times, never *suppress*, and it
 over-paged 4 of 16 notify-level problems.
 
-**LangGraph vs loop:** pending ([PR #8](https://github.com/Vegess/nightwarden/pull/8), 71/96 scored). A daily
+**LangGraph vs loop:** pending ([PR #8](https://github.com/Vegess/nightwarden/pull/8), 86/96 scored). A daily
 workflow scores the rest within Groq's free tier.
 
 The development run (variation 0, 12 cases) is in `eval/results-dev.json`; it led to one general change
