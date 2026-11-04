@@ -120,39 +120,44 @@ def _valid_decision(args: dict) -> str | None:
     return None
 
 
-def triage(event: dict, evidence: Evidence, client=None, model: str | None = None,
-           max_rounds: int | None = None, provider: str = "Groq") -> TriageResult:
-    """`provider` only names the model's provider in short errors ("Gemini rate limit (429)")."""
-    client = client or _client()
-    model = model or settings.groq_model
-    max_rounds = max_rounds or settings.agent_max_rounds
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": format_event(event)}]
-    calls: list[dict] = []
-    tokens_in = tokens_out = 0
-    start = time.perf_counter()
-    mark = start  # end of the previous step: each step's duration includes the model's thinking before it
-    failures = 0
+class TriageRun:
+    """One triage's state and its two steps, shared by the loop below and the
+    LangGraph orchestrator (app/agent/graph.py), so both behave identically:
+    same tools, prompt, decide schema, round limit and per-step records."""
 
-    def close_step(result=None) -> None:
+    def __init__(self, event: dict, evidence: Evidence, client=None, model: str | None = None,
+                 max_rounds: int | None = None, provider: str = "Groq"):
+        self.client = client or _client()
+        self.model = model or settings.groq_model
+        self.max_rounds = max_rounds or settings.agent_max_rounds
+        self.provider = provider  # names the provider in short errors
+        self.evidence = evidence
+        self.messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT},
+                                     {"role": "user", "content": format_event(event)}]
+        self.calls: list[dict] = []
+        self.tokens_in = self.tokens_out = 0
+        self.start = time.perf_counter()
+        self.mark = self.start  # end of the previous step: each step's duration includes the model's thinking before it
+        self.failures = 0
+
+    def close_step(self, result=None) -> None:
         """Stamp the latest call with its duration and a public-safe result summary."""
-        nonlocal mark
         now = time.perf_counter()
-        calls[-1]["duration_ms"] = int((now - mark) * 1000)
-        mark = now
+        self.calls[-1]["duration_ms"] = int((now - self.mark) * 1000)
+        self.mark = now
         if result is not None:
-            calls[-1]["result_summary"] = summarize_result(calls[-1]["tool"], result)
+            self.calls[-1]["result_summary"] = summarize_result(self.calls[-1]["tool"], result)
 
-    for round_i in range(max_rounds):
-        last = round_i == max_rounds - 1
-        resp = None
+    def call_model(self, round_i: int):
+        """Ask the model for the next step. Returns the reply, or None if this round's call failed once."""
+        last = round_i == self.max_rounds - 1
         for waited in range(RATE_LIMIT_RETRIES + 1):
             try:
-                resp = client.chat.completions.create(
-                    model=model, messages=messages, tools=DECIDE_ONLY if last else TOOLS, temperature=0.2, max_tokens=1200,
+                return self.client.chat.completions.create(
+                    model=self.model, messages=self.messages, tools=DECIDE_ONLY if last else TOOLS, temperature=0.2,
+                    max_tokens=1200,
                     tool_choice={"type": "function", "function": {"name": "decide"}} if last else "auto",
                 )
-                break
             except Exception as exc:  # noqa: BLE001 — every provider failure ends here, loudly
                 delay = rate_limit_delay(exc)
                 if delay is not None and delay <= MAX_RATE_LIMIT_WAIT_S and waited < RATE_LIMIT_RETRIES:
@@ -160,27 +165,29 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
                     logger.warning("Triage model rate-limited; retrying in %.1fs", delay)
                     sleep(delay)
                     continue
-                failures += 1
+                self.failures += 1
                 logger.warning("Triage model call failed (round %s): %s", round_i + 1, str(exc)[:300])
-                if failures >= 2 or last or delay is not None:
-                    raise AgentUnavailable(short_error(exc, provider)) from exc
-                break
-        if resp is None:
-            continue
+                if self.failures >= 2 or last or delay is not None:
+                    raise AgentUnavailable(short_error(exc, self.provider)) from exc
+                return None
+        return None
+
+    def take_step(self, round_i: int, resp) -> TriageResult | None:
+        """Record the reply and run its tool calls. Returns the decision once `decide` is valid."""
         usage = getattr(resp, "usage", None)
-        tokens_in += getattr(usage, "prompt_tokens", 0) or 0
-        tokens_out += getattr(usage, "completion_tokens", 0) or 0
+        self.tokens_in += getattr(usage, "prompt_tokens", 0) or 0
+        self.tokens_out += getattr(usage, "completion_tokens", 0) or 0
         msg = resp.choices[0].message
         tool_calls = msg.tool_calls or []
-        messages.append({
+        self.messages.append({
             "role": "assistant", "content": msg.content or "",
             **({"tool_calls": [{"id": tc.id, "type": "function",
                                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
                                for tc in tool_calls]} if tool_calls else {}),
         })
         if not tool_calls:
-            messages.append({"role": "user", "content": "Use a tool to gather evidence, or call `decide` if you have enough."})
-            continue
+            self.messages.append({"role": "user", "content": "Use a tool to gather evidence, or call `decide` if you have enough."})
+            return None
 
         for tc in tool_calls:
             name = tc.function.name
@@ -190,32 +197,51 @@ def triage(event: dict, evidence: Evidence, client=None, model: str | None = Non
                 args, result = {}, {"error": "arguments were not valid JSON"}
             else:
                 result = None
-            calls.append({"round": round_i + 1, "tool": name, "args": args})
+            self.calls.append({"round": round_i + 1, "tool": name, "args": args})
 
             if name == "decide" and result is None:
                 problem = _valid_decision(args)
                 if problem is None:
-                    close_step()
+                    self.close_step()
                     return TriageResult(
                         action=args["action"], confidence=args["confidence"],
                         summary=str(args["summary"])[:300], rationale=str(args["rationale"])[:4000],
-                        tool_calls=calls, rounds=round_i + 1, tokens_in=tokens_in, tokens_out=tokens_out,
-                        latency_ms=int((time.perf_counter() - start) * 1000),
+                        tool_calls=self.calls, rounds=round_i + 1, tokens_in=self.tokens_in, tokens_out=self.tokens_out,
+                        latency_ms=self._elapsed_ms(),
                     )
                 result = {"error": problem}
             elif result is None:
                 try:
-                    result = run_tool(evidence, name, args)
+                    result = run_tool(self.evidence, name, args)
                 except Exception as exc:  # noqa: BLE001 — tell the model, don't crash the triage
                     result = {"error": f"{type(exc).__name__}: {exc}"}
-            close_step(result)
-            calls[-1]["result_preview"] = json.dumps(result, default=str)[:600]
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)[:6000]})
+            self.close_step(result)
+            self.calls[-1]["result_preview"] = json.dumps(result, default=str)[:600]
+            self.messages.append({"role": "tool", "tool_call_id": tc.id, "content": json.dumps(result, default=str)[:6000]})
+        return None
 
-    return TriageResult(
-        action="notify", confidence="low", inconclusive=True,
-        summary="Triage inconclusive: the agent did not decide within its round budget",
-        rationale=f"No valid decide call in {max_rounds} rounds. A person should look at this signal.",
-        tool_calls=calls, rounds=max_rounds, tokens_in=tokens_in, tokens_out=tokens_out,
-        latency_ms=int((time.perf_counter() - start) * 1000),
-    )
+    def inconclusive(self) -> TriageResult:
+        return TriageResult(
+            action="notify", confidence="low", inconclusive=True,
+            summary="Triage inconclusive: the agent did not decide within its round budget",
+            rationale=f"No valid decide call in {self.max_rounds} rounds. A person should look at this signal.",
+            tool_calls=self.calls, rounds=self.max_rounds, tokens_in=self.tokens_in, tokens_out=self.tokens_out,
+            latency_ms=self._elapsed_ms(),
+        )
+
+    def _elapsed_ms(self) -> int:
+        return int((time.perf_counter() - self.start) * 1000)
+
+
+def triage(event: dict, evidence: Evidence, client=None, model: str | None = None,
+           max_rounds: int | None = None, provider: str = "Groq") -> TriageResult:
+    """`provider` only names the model's provider in short errors ("Gemini rate limit (429)")."""
+    run = TriageRun(event, evidence, client=client, model=model, max_rounds=max_rounds, provider=provider)
+    for round_i in range(run.max_rounds):
+        resp = run.call_model(round_i)
+        if resp is None:
+            continue
+        result = run.take_step(round_i, resp)
+        if result is not None:
+            return result
+    return run.inconclusive()

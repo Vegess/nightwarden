@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "openai/gpt-oss-120b"
     agent_max_rounds: int = 6
+    orchestrator: Literal["loop", "langgraph"] = "loop"   # same tools, prompt and limits, different control flow
     groq_daily_token_limit: int = 200_000   # the free tier's tokens per day; /api/usage and /api/health/checks
     # Backup AI, tried when Groq is unavailable, before the rules. Its decisions are marked degraded.
     backup_llm_provider: Literal["gemini", "anthropic"] = "gemini"

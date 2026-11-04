@@ -18,8 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.agent.baseline import rules_triage
 from app.agent.evidence import Evidence
-from app.agent.orchestrator import AgentUnavailable, TriageResult, triage as agent_triage
+from app.agent.orchestrator import AgentUnavailable, TriageResult
 from app.agent.providers import chain
+from app.agent.runner import triage as agent_triage
 from app.core.config import get_settings
 from app.db.models import Decision, Event, Incident
 from app.services import notify
