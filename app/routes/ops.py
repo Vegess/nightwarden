@@ -153,7 +153,7 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
     out.append(_check("Groq tokens today", "pass" if share < 0.8 else "warn" if share < 1 else "fail",
                       f"{used:,} of {limit:,} ({share:.0%}); warn at 80 %"))
 
-    neon = neon_usage()
+    neon = neon_usage(db, now)
     if not neon["configured"]:
         out.append(_check("Neon network transfer", "warn", neon["detail"]))
     elif neon.get("error"):
@@ -177,27 +177,96 @@ def transfer_status(share: float) -> str:
     return "fail" if share >= 0.9 else "warn" if share >= 0.7 else "pass"
 
 
+def _neon_reason(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timed out"
+    if isinstance(exc, httpx.HTTPError):
+        return f"unreachable, {type(exc).__name__}"
+    return f"bad reply, {type(exc).__name__}"
+
+
 def _neon_fetch() -> dict:
+    """One call to Neon's project endpoint. Any failure is a short reason, never an exception."""
     if not (settings.neon_api_key and settings.neon_project_id):
         return {"configured": False, "detail": "not configured (set NEON_API_KEY and NEON_PROJECT_ID)"}
     try:
         r = httpx.get(f"https://console.neon.tech/api/v2/projects/{settings.neon_project_id}", timeout=10,
                       headers={"Authorization": f"Bearer {settings.neon_api_key}", "Accept": "application/json"})
         r.raise_for_status()
-        p = r.json().get("project", {})
-    except (httpx.HTTPError, ValueError) as exc:
-        status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
-        return {"configured": True, "error": f"Neon API failed ({status})", "limit": settings.neon_cu_hours_limit}
+        p = r.json()["project"]
+        transfer = int(p.get("data_transfer_bytes") or 0)
+        cu_hours = round((p.get("compute_time_seconds") or 0) / 3600, 2)
+    except Exception as exc:  # noqa: BLE001 — a usage read must never break /health
+        return {"configured": True, "error": f"could not read Neon usage ({_neon_reason(exc)})",
+                "limit": settings.neon_cu_hours_limit}
+    return {"configured": True, "cu_hours": cu_hours, "limit": settings.neon_cu_hours_limit,
+            "period_start": p.get("consumption_period_start"), "transfer_bytes": transfer}
+
+
+def _parse_ts(value) -> datetime | None:
+    try:
+        return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00"))) if value else None
+    except ValueError:
+        return None
+
+
+def month_to_date_bytes(db: Session | None, counter: int, period_start, now: datetime) -> int:
+    """Neon transfer since the 1st of this month (UTC).
+
+    Neon's counter covers its own consumption period, which need not start on the 1st (on the free
+    plan it often did not reset at all), so a counter left over from last month showed as this
+    month's. When Neon's period started before the 1st, a base is kept on the poller state row: the
+    last counter seen last month (or the first one seen this month), subtracted from the counter.
+    If Neon resets mid-month, what was counted so far is carried over. One small read per hour."""
+    month_start = _day_start(now).replace(day=1)
+    started = _parse_ts(period_start)
+    if started and started >= month_start:
+        return counter  # Neon's own period began this month
+    state = db.get(PollerState, settings.target_name) if db is not None else None
+    if state is None:
+        return counter
+    key = month_start.strftime("%Y-%m")
+    prev = (month_start - timedelta(days=1)).strftime("%Y-%m")
+    base, last = state.neon_transfer_base, state.neon_transfer_last
+    if state.neon_month != key:
+        base = last if state.neon_month == prev and last is not None and last <= counter else counter
+    elif last is not None and counter < last:
+        base = (base or 0) - last  # Neon reset mid-month: keep what was counted before the reset
+    elif base is None:
+        base = counter
+    if (state.neon_month, state.neon_transfer_base, state.neon_transfer_last) != (key, base, counter):
+        state.neon_month, state.neon_transfer_base, state.neon_transfer_last = key, base, counter
+        db.commit()
+    return max(0, counter - base)
+
+
+def _neon_build(db: Session | None, now: datetime | None) -> dict:
+    raw = _neon_fetch()
+    if not raw["configured"] or raw.get("error"):
+        return raw
+    now = now or datetime.now(timezone.utc)
+    try:
+        mtd = month_to_date_bytes(db, raw.pop("transfer_bytes"), raw.get("period_start"), now)
+    except Exception as exc:  # noqa: BLE001
+        if db is not None:
+            db.rollback()
+        return {**raw, "error": f"could not read Neon usage (month-to-date base: {type(exc).__name__})"}
     limit_gb = settings.neon_transfer_limit_gb
-    gb = (p.get("data_transfer_bytes") or 0) / 1e9
-    return {"configured": True, "cu_hours": round((p.get("compute_time_seconds") or 0) / 3600, 2),
-            "limit": settings.neon_cu_hours_limit, "period_start": p.get("consumption_period_start"),
+    gb = mtd / 1e9
+    return {**raw, "month_start": _day_start(now).replace(day=1).isoformat(),
             "transfer": {"gb": round(gb, 3), "limit_gb": limit_gb, "share": round(gb / limit_gb, 4) if limit_gb else 1.0}}
 
 
-def neon_usage() -> dict:
-    """Neon's consumption for the billing month; one API call an hour at most (both pages share it)."""
-    return _cached("neon", 3600, _neon_fetch)
+def neon_usage(db: Session | None = None, now: datetime | None = None) -> dict:
+    """Neon's usage, month to date; one API call an hour at most (both pages share it), errors retried after 5 min."""
+    hit = _cache.get("neon")
+    if hit and time.monotonic() - hit[0] < (300 if hit[1].get("error") else 3600):
+        return hit[1]
+    value = _neon_build(db, now)
+    _cache["neon"] = (time.monotonic(), value)
+    return value
 
 
 def _iso(dt):
@@ -263,7 +332,7 @@ def build_usage(db: Session, now: datetime | None = None) -> dict:
                    "today": e_today.get(True, 0), "today_failed": e_today.get(False, 0),
                    "month": e_month.get(True, 0), "month_failed": e_month.get(False, 0),
                    "month_limit": EMAILS_PER_DAY * days},
-        "neon": neon_usage(),
+        "neon": neon_usage(db, now),
     }
 
 

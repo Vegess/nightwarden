@@ -142,8 +142,11 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
     interval = (now - _utc(state.last_ok_ts)).total_seconds() if state.last_ok_ts else float(settings.poll_interval_s)
     d = {k: v for k, v in signals.delta(prev_raw, raw, interval).items() if k in DELTA_KEYS}
 
+    stored = json.loads(state.deltas)
+    previous_window = ([x for t, x in stored if t >= (_utc(state.last_ok_ts) - WINDOW).timestamp()]
+                       if state.last_ok_ts else [])
     cutoff = (now - WINDOW).timestamp()
-    deltas = [[t, x] for t, x in json.loads(state.deltas) if t >= cutoff] + [[now.timestamp(), d]]
+    deltas = [[t, x] for t, x in stored if t >= cutoff] + [[now.timestamp(), d]]
     slot = int(now.timestamp()) // SLOT_S
     traffic = [[sl, v] for sl, v in json.loads(state.traffic) if slot - 144 < sl < slot]
     history = [v for _, v in traffic]
@@ -159,9 +162,14 @@ def poll_once(db: Session, fetch=None, now: datetime | None = None, triage_clien
     if prev_raw and raw.get("commit") and raw.get("commit") != prev_raw.get("commit") and raw.get("commit") != "unknown":
         db.add(Deploy(service=service, commit_sha=raw["commit"], note="new commit seen in /metrics", ts=now))
     elif d["restarted"] and prev_raw and float(prev_raw.get("uptime_s") or 0) > 600:
-        e = _fire(db, "restart", f"restarted without a new deploy (was up {int(float(prev_raw['uptime_s']) // 60)} min)",
-                  w, now, triage_client)
-        fired += [e] if e else []
+        up = int(float(prev_raw["uptime_s"]) // 60)
+        if detectors.quiet_restart(previous_window, d, deployed=False):
+            # Idle recycle (Render free tier): a timeline entry, no triage, no incident, no Groq call.
+            db.add(Event(service=service, kind="restart", source="info", ts=now, metrics="{}",
+                         detail=f"restarted while idle (was up {up} min): no requests or errors before it, no deploy"))
+        else:
+            e = _fire(db, "restart", f"restarted without a new deploy (was up {up} min)", w, now, triage_client)
+            fired += [e] if e else []
 
     # Back up after an outage.
     if had_failures:
@@ -208,8 +216,9 @@ def check_backup(db: Session, state: PollerState, now: datetime) -> None:
     if backup is None:
         return
     every = BACKUP_CHECK_EVERY if state.backup_error is None else BACKUP_RETRY_AFTER
-    if state.backup_checked_at and now - _utc(state.backup_checked_at) < every:
-        return
+    stale = state.backup_error is not None and not state.backup_error.startswith(f"{backup.model}:")
+    if state.backup_checked_at and now - _utc(state.backup_checked_at) < every and not stale:
+        return  # (a failure recorded for another model, e.g. before a model change, is retested at once)
     ok, error = providers.ping(backup)
     state.backup_checked_at, state.backup_error = now, error
     if ok:

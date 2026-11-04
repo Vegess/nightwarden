@@ -35,3 +35,14 @@ def detect(m: dict, previous_requests: float | None = None) -> list[Signal]:
     if previous_requests is not None and previous_requests >= 20 and m["traffic_ratio"] <= 0.1:
         out.append(Signal("traffic_drop", f"requests fell to {req} in 5 min, {m['traffic_ratio']}x typical"))
     return out
+
+
+def quiet_restart(previous_window: list[dict], since_restart: dict, deployed: bool) -> bool:
+    """A restart nobody could have felt: no deploy, and the window before it had zero requests and
+    zero errors (a free-tier host recycling an idle process), with no errors since. Recorded as an
+    info event on the Live timeline, not triaged. Any traffic or errors before it, or errors after
+    it, and the restart is triaged as before."""
+    if deployed or not previous_window:
+        return False
+    before = sum(d.get("requests", 0) for d in previous_window) + sum(d.get("s5xx", 0) for d in previous_window)
+    return before == 0 and since_restart.get("s5xx", 0) == 0

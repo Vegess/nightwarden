@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # Backup AI, tried when Groq is unavailable, before the rules. Its decisions are marked degraded.
     backup_llm_provider: Literal["gemini", "anthropic"] = "gemini"
     backup_llm_api_key: str | None = None
-    backup_llm_model: str | None = None     # default: gemini-2.5-flash / claude-haiku-5-5
+    backup_llm_model: str | None = None     # default: gemini-flash-latest / claude-haiku-5-5
 
     # Neon usage on /api/usage (optional): an API key and the project id from the Neon console.
     neon_api_key: str | None = None

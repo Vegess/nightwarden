@@ -40,12 +40,12 @@ def compute_day(db: Session, day: date) -> DailyStat:
     snaps = dict(db.execute(select(Snapshot.ok, func.count()).where(Snapshot.ts >= start, Snapshot.ts < end)
                             .group_by(Snapshot.ok)).all())
     events = db.scalar(select(func.count()).select_from(Event).where(
-        Event.ts >= start, Event.ts < end, Event.source != "eval")) or 0
+        Event.ts >= start, Event.ts < end, Event.source.notin_(("eval", "info")))) or 0
     decisions = db.execute(select(Decision.action, Decision.triager, Decision.provider, Decision.tokens_in, Decision.tokens_out,
                                   Decision.latency_ms, Decision.degraded).join(Event, Event.id == Decision.event_id).where(
         Decision.ts >= start, Decision.ts < end, Event.source != "eval")).all()
     kinds = dict(db.execute(select(Event.kind, func.count()).where(
-        Event.ts >= start, Event.ts < end, Event.source != "eval").group_by(Event.kind)).all())
+        Event.ts >= start, Event.ts < end, Event.source.notin_(("eval", "info"))).group_by(Event.kind)).all())
     severity = dict(db.execute(select(Incident.severity, func.count()).where(
         Incident.opened_at >= start, Incident.opened_at < end).group_by(Incident.severity)).all())
     resolved = db.execute(select(Incident.opened_at, Incident.closed_at).where(

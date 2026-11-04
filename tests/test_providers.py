@@ -95,7 +95,7 @@ def test_chain_uses_backup_settings(monkeypatch):
     assert [p.name for p in providers.chain()] == ["groq"]
     _backup_settings(monkeypatch)
     assert [(p.name, p.model) for p in providers.chain()] == [("groq", providers.get_settings().groq_model),
-                                                              ("gemini", "gemini-2.5-flash")]
+                                                              ("gemini", "gemini-flash-latest")]
     _backup_settings(monkeypatch, provider="anthropic")
     b = providers.chain()[1]
     assert (b.name, b.model, b.label) == ("anthropic", "claude-haiku-5-5", "Anthropic")
@@ -220,7 +220,7 @@ def test_backup_check_runs_from_the_poll_twice_a_day_and_drives_health(db, monke
         db.commit()
         h = _health(db, monkeypatch)
         assert h["status"] == "pass" and "gemini" in h["detail"]
-    result[0] = (False, "Gemini auth error (401)")
+    result[0] = (False, "gemini-flash-latest: Gemini auth error (401)")
     _poll(db, T0 + timedelta(hours=13))
     assert pings == ["gemini", "gemini"]
     state = db.get(PollerState, "citebase")
@@ -237,3 +237,36 @@ def test_backup_key_set_but_never_tested_is_a_warning(db, monkeypatch):
     _backup_settings(monkeypatch)
     h = _health(db, monkeypatch)
     assert h["status"] == "warn" and "not tested yet" in h["detail"]
+
+
+def test_failed_ping_names_the_model_and_the_providers_own_reason(db, monkeypatch):
+    """A retired Gemini id answers 404 with a list-shaped body; /health must say so in a few words."""
+    def handler(request):
+        return httpx.Response(404, json=[{"error": {"code": 404, "status": "NOT_FOUND", "message":
+            "models/gemini-2.5-flash is not found for API version v1beta, or is not supported for generateContent."}}])
+    real = httpx.Client
+    monkeypatch.setattr(providers.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler)))
+    _backup_settings(monkeypatch)
+    monkeypatch.setattr(providers.get_settings(), "backup_llm_model", "gemini-2.5-flash")
+    ok, error = providers.ping(providers.backup())
+    assert not ok and error.startswith("gemini-2.5-flash: Gemini error (404): models/gemini-2.5-flash is not found")
+    assert len(error) <= 200
+    _poll(db, T0)
+    h = _health(db, monkeypatch)
+    assert h["status"] == "fail" and "Gemini error (404): models/gemini-2.5-flash is not found" in h["detail"]
+
+
+def test_provider_message_drops_keys_and_trims():
+    r = httpx.Response(400, json={"error": {"message": "API key not valid: AIzaSyD-1234567890abcdef. " + "x" * 200}})
+    msg = providers.provider_message(providers.ProviderError(400, r, r.text))
+    assert "AIza" not in msg and "[key]" in msg and len(msg) <= 90
+
+
+def test_a_failure_recorded_for_another_model_is_retested_at_once(db, monkeypatch):
+    pings = []
+    monkeypatch.setattr(providers, "ping", lambda p: pings.append(p.model) or (True, None))
+    _backup_settings(monkeypatch)
+    db.add(PollerState(service="citebase", backup_checked_at=T0, backup_error="gemini-2.5-flash: Gemini error (404)"))
+    db.commit()
+    _poll(db, T0 + timedelta(minutes=10))
+    assert pings == ["gemini-flash-latest"] and db.get(PollerState, "citebase").backup_error is None

@@ -1,65 +1,44 @@
 # Nightwarden
 
-An AI on-call agent that watches [Citebase](https://documind-beta-lac.vercel.app) (my multi-tenant RAG app) and
-decides what a human should do when something looks wrong: **page**, **notify**, **watch** or **suppress**. Every
-decision shows the evidence it gathered and why.
+**An AI SRE agent that catches silent LLM failures: HTTP 200, 0% errors, wrong answers.**
+
+Live: **[nightwarden-swart.vercel.app](https://nightwarden-swart.vercel.app)** (read-only public view), watching
+[Citebase](https://documind-beta-lac.vercel.app), my multi-tenant RAG app.
+
+When something looks wrong, Nightwarden investigates with read-only tools and decides what a human should do:
+**page**, **notify**, **watch** or **suppress**. Every decision shows the evidence it gathered and why.
 
 It exists because of a real outage. Citebase's LLM provider retired the model it used, the exception was swallowed,
 and the app served polite fallback answers for two days. Uptime was 100%, error rate 0%, and every answer was useless.
 Ordinary monitoring can't see that kind of failure. Nightwarden is built to.
 
-## How it works
+| Live | Incident trace | Insights |
+|---|---|---|
+| [![Live page](docs/img/live.png)](docs/img/live.png) | [![Incident trace](docs/img/incident-trace.png)](docs/img/incident-trace.png) | [![Insights](docs/img/insights.png)](docs/img/insights.png) |
 
-```
-Citebase /metrics, /metrics/logs
-        │  every 60 s
-        ▼
-  Poller ──► snapshot ──► 5-min window ──► detectors ──► event
-                                                          │
-                       ┌──────────────────────────────────┘
-                       ▼
-               Triage agent (Groq tool calling)
-               get_recent_logs · get_metrics · get_deploy_history · search_past_incidents
-                       │
-                       ▼  decide(action, summary, rationale, confidence)
-               incident (merged / escalated) ──► Discord or Slack · email for pages
-```
+<sub>Screenshots: a local instance at 1200 px with three days of simulated polls. The incident replays held-out
+eval case 2/4 (model decommissioned): its tool sequence and summary as recorded in `eval/results.json`.</sub>
 
-- **Collector.** Polls Citebase's token-protected metrics and log endpoints, turns counters into rates over a
-  5-minute window, and notices deploys (commit changed), restarts (uptime reset) and outages (3 failed polls).
-- **Detectors** fire on server errors, 4xx storms, latency, **fallback answers**, **empty retrieval**, and traffic
-  spikes or drops. Each kind has a 30-minute cooldown.
-- **Agent.** The model investigates with four read-only tools and ends by calling `decide`. The system prompt
-  describes the costs of paging versus missing a failure. It contains no "signal X means action Y" rules.
-- **Fail loud.** If the model is unavailable, Nightwarden falls back to the rules and raises the result: silent-
-  failure signals (fallback spike, zero chunks, target down) always page. It never goes quiet because its own AI broke.
-- **Two orchestrators.** `ORCHESTRATOR=loop` (default) is a plain tool-calling loop; `ORCHESTRATOR=langgraph` runs
-  the same steps as a LangGraph state machine. Both share the tools, prompt, `decide` schema, round limit and
-  per-step trace (see the comparison under Evaluation).
-- **Incidents.** Repeats of the same kind within 6 hours merge into one incident; alerts go out only when an incident
-  opens or gets more severe. Incidents resolve themselves after 3 quiet hours.
-- **Watching the watcher.** Every poll pings a healthchecks.io dead-man switch; if polls stop, it emails.
-- **Runs anywhere.** As a long-running container (Docker, background poller) or serverless on Vercel, where an
-  external scheduler calls `/api/cron/poll` and events cut off mid-triage are picked up on the next poll.
-
-## Evaluation
+## Results
 
 60 labelled cases: 12 failure scenarios × 5 seeded variations, replayed from fixtures (no live traffic). The
 expected actions (`harness/labels.yaml`) and the rules baseline (`app/agent/baseline.py`) were written and frozen
 **before** the agent existed, so neither could be tuned to make the agent look good.
 
-**Held-out result** (variations 1–4: 48 cases never looked at before the run; `openai/gpt-oss-120b`, 11–12 Oct 2026;
-both columns scored on the same 48 cases):
+**Held-out: agent vs frozen rules** (variations 1–4: 48 cases never looked at before the run; `openai/gpt-oss-120b`;
+from `eval/results.json`, both columns scored on the same 48 cases):
 
-| Metric | Rules baseline | Agent |
+| Metric | Frozen rules | Agent |
 |---|---|---|
-| Action accuracy | 41.7% | **60.4%** |
-| Page recall (real emergencies paged) | 20.0% | **95.0%** |
-| Page precision (pages that were real) | 100.0% | 82.6% |
+| Action accuracy | 41.7% (20/48) | **60.4%** (29/48) |
+| Page recall (real emergencies paged) | 20.0% (4/20) | **95.0%** (19/20) |
+| Page precision (pages that were real) | 100.0% (4/4) | 82.6% (19/23) |
 | Silent-degradation recall | 0.0% | **75.0%** |
 | Accuracy on loud failures | 55.6% | 55.6% |
 | Median tool calls · mean tokens / event | — | 4 · 6,409 |
 | p95 decision time | ~0 s | 39.5 s (includes free-tier rate-limit waits) |
+
+**Per scenario** (correct of 4 held-out variations):
 
 | # | Scenario | Expected | Rules | Agent |
 |---|---|---|---|---|
@@ -77,93 +56,77 @@ both columns scored on the same 48 cases):
 | 12 | normal traffic (control) | suppress | 4/4 | 0/4 |
 
 **What it means.** The agent finds the failures that matter: 19 of 20 real emergencies paged, against 4 of 20 for the
-rules. The one miss was a silent fallback it flagged as *notify* instead of *page*; the rules caught none of the
-silent failures. Its weakness is the opposite of
-the rules': it never dismisses anything. On the 12 benign cases it chose *watch* 8 times and *notify* 4 times,
-never *suppress*; and it over-paged 4 of 16 notify-level problems. It also didn't weigh repetition: for the
-repeating transient error it searched past incidents in 2 of 4 runs, saw the earlier occurrences, and still chose
-*watch*. (A post-hoc reading, not a pre-registered metric: *watch* records without interrupting anyone, so the
-benign cases produced 4 unnecessary notifications in 12, and no pages.)
+rules, and 75% of the silent ones, where the rules caught none. Its weakness is the opposite of the rules': it never
+dismisses anything. On the 12 benign cases it chose *watch* 8 times and *notify* 4 times, never *suppress*, and it
+over-paged 4 of 16 notify-level problems.
 
-The development-run results are in `eval/results-dev.json`; the held-out results are `eval/results.json`
-and appear on the dashboard's Evaluation tab.
+**LangGraph vs loop:** pending ([PR #8](https://github.com/Vegess/nightwarden/pull/8), 86/96 scored). A daily
+workflow scores the rest within Groq's free tier.
 
-**Development run** (variation 0 of each scenario, 12 cases, `openai/gpt-oss-120b`, 11 Oct 2026). These cases
-have been looked at, so they're a development set, not the headline result:
+The development run (variation 0, 12 cases) is in `eval/results-dev.json`; it led to one general change
+(`get_metrics` also returns the window's median). Labels and the baseline were not touched.
 
-| Metric | Rules baseline | Agent |
-|---|---|---|
-| Action accuracy | 41.7% | 41.7% |
-| Page precision | 100.0% | 66.7% |
-| Page recall | 20.0% | 80.0% |
-| Silent-degradation recall | 0.0% | 33.3% |
-| Accuracy on loud failures | 55.6% | 44.4% |
-| Median tool calls / mean tokens | — | 3 / 5,919 |
+## Architecture
 
-What it showed: the agent catches the real outages the rules miss (4 of 5 page-worthy cases, including the emptied
-vector store) but over-escalates: it paged for an LLM timeout and for a traffic drop that warranted a notify, and it
-called normal latency "high" on quiet controls because it had nothing to compare against. One change was made after
-this run, and it is general rather than scenario-specific: `get_metrics` now also returns the window's median, so
-the model judges a value against the service's own normal. Labels and the baseline were not touched.
+```
+Citebase /metrics, /metrics/logs
+        │  every 10 min (external scheduler → /api/cron/poll on Vercel)
+        ▼
+  Poller ──► poller_state + trimmed snapshot ──► 5-min window ──► detectors ──► event
+                                                                                 │
+             idle restart (no traffic, no errors, no deploy) ──► info event on the Live timeline, not triaged
+                                                                                 ▼
+  Triage:  Groq (tool calling) ──► Gemini backup ──► frozen rules
+           get_recent_logs · get_metrics · get_deploy_history · search_past_incidents → decide(...)
+                                                                                 │
+                                                                                 ▼
+  incident (merged / escalated) ──► Discord or Slack · email for pages
+```
 
-**Loop vs LangGraph** (held-out variations 1–4, `openai/gpt-oss-120b`; latency includes free-tier rate-limit
-waits). **In progress:** Groq's free daily token cap (200k tokens/day) stops a run part-way. Every run of the *Agent
-eval* workflow resumes where the last stopped (scored cases are skipped), spends at most 120k tokens across both
-orchestrators, and uses the same Groq model for both; the backup provider is never used. `python -m eval.compare`
-prints the current table from `eval/results-loop.json` and `eval/results-langgraph.json`. Compare the two only on
-the paired row (cases both ran): run-to-run variance on 48 cases is large.
+- **Collector and detectors.** Counters become rates over a 5-minute window. Detectors fire on server errors, 4xx
+  storms, latency, **fallback answers**, **empty retrieval**, traffic spikes or drops, deploys, restarts and outages.
+  Each kind has a 30-minute cooldown. Free-tier idle restarts are recorded, not triaged.
+- **Agent.** The model investigates with four read-only tools and must end by calling `decide`. The prompt describes
+  the costs of paging versus missing a failure; it contains no "signal X means action Y" rules.
+- **Fail loud: Groq → Gemini → rules.** If Groq is rate-limited or down, the backup (Gemini, `gemini-flash-latest`)
+  decides; if both fail, the rules decide and silent-failure signals always page. Anything not decided by Groq is
+  marked *degraded*. Provider errors are shortened before they reach an alert.
+- **Self-checks.** `/health` runs checks on itself (poll freshness, target reachable, Groq usable, backup provider
+  tested twice a day, alerts configured, migrations at head, Groq tokens today, Neon transfer month to date).
+  `/usage` shows the free-tier budgets. `/insights` gathers performance (paths, speed, agreement with a shadow
+  rules decision recorded next to every live one), weekly/monthly/yearly reports, health, usage and the eval.
+- **Cost controls.** Polls every 10 minutes; one `poller_state` row read per poll instead of past snapshots; stored
+  readings keep only the keys something reads; column selects; public reads edge-cached (`s-maxage=60`); Neon's
+  API read at most hourly; the eval capped at 120K Groq tokens per run.
+  **Measured Neon egress** (`python -m scripts.measure_egress`, 24 h of 10-minute polls, values only):
 
-Limits, stated plainly: the labels were written by the person who built the agent; 60 cases is small; fixtures
-approximate Citebase's real logs but aren't real incidents.
+  | | before | after |
+  |---|---|---|
+  | bytes read per poll | 316,129 B (≈1.37 GB/month) | 3,043 B (≈13 MB/month), **−99%** |
+  | bytes read per Live page refresh | 156,927 B | 12,012 B, **−92%** |
+
+## Limitations
+
+- The labels were written by the person who built the agent; 60 cases is small; fixtures approximate Citebase's
+  real logs but aren't real incidents.
+- The agent over-escalates benign signals (never chose *suppress* on held-out cases).
+- One LLM call per event; next step is grouping alerts before triage.
+- Free tiers set the pace: 10-minute polls, Groq's daily token cap, Neon's 5 GB transfer.
 
 ## Run it
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # fill TARGET_URL / TARGET_METRICS_TOKEN / GROQ_API_KEY
+cp .env.example .env          # TARGET_URL, TARGET_METRICS_TOKEN, GROQ_API_KEY
 alembic upgrade head
 uvicorn app.main:app --reload # dashboard on http://localhost:8000
+pytest -q                     # no network, no key needed
+python -m eval.report         # held-out tables from eval/results.json
 ```
 
-```bash
-pytest -q                          # no network, no key needed
-python -m eval.run_eval            # baseline only
-python -m eval.run_eval --agent    # agent + baseline (uses Groq quota)
-python -m eval.report              # comparison tables
-python -m eval.run_eval --agent --from-rep 1 --orchestrator loop --out eval/results-loop.json
-python -m eval.run_eval --agent --from-rep 1 --orchestrator langgraph --out eval/results-langgraph.json
-python -m eval.compare             # loop vs LangGraph table
-```
-
-Deploying (Vercel + Neon + an external scheduler) is covered in [docs/DEPLOY.md](docs/DEPLOY.md); design notes and
-decisions are in [docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
-
-## API
-
-Public, read-only: `GET /api/performance?days=7|30|365` (how the agent decides, including how often it disagrees
-with the shadow rules baseline recorded next to every live decision), `GET /api/reports?period=week|month|year&offset=0`
-(`&format=csv` for days), `GET /health`, `/api/status`, `/api/incidents`, `/api/incidents/{id}`, `/api/decisions`,
-`/api/eval`, `/api/health/checks` (self-checks, cached 60 s), `/api/usage` (free-tier budgets, cached 5 min).
-The first poll after midnight UTC writes yesterday's `daily_stats` row (backfilling missed days); snapshots are
-kept 30 days and deleted only once their day is rolled up. Reports read `daily_stats`; on the first poll after
-Monday 03:30 UTC the webhook gets last week's digest, once (the week is recorded on `poller_state`).
-
-Triage tries Groq, then the backup AI (`BACKUP_LLM_PROVIDER`, Gemini by default, when `BACKUP_LLM_API_KEY` is set),
-then the rules. `decisions.provider` records which one decided; anything not decided by Groq is `degraded`.
-Provider errors are shortened ("Gemini rate limit (429)") before they reach a rationale or an alert. The poll
-makes a 1-token test call to the backup twice a day; `/api/health/checks` passes it only after a success in the
-last 24 h.
-
-Database egress is kept small on purpose (Neon's free plan meters network transfer): a poll reads one
-`poller_state` row instead of past snapshots, stored readings keep only the `/metrics` keys something reads,
-queries select columns rather than rows, and public reads carry `Cache-Control: public, s-maxage=60` so the
-CDN answers repeat viewers. `python -m scripts.measure_egress` measures it; `--sizes` reports row sizes in the
-live database.
-Admin (`Authorization: Bearer $ADMIN_TOKEN`): `POST /api/deploys`, `POST /api/events` (fire a test event end to
-end), `POST /api/alerts/test` (send one test page, no triage), `POST /api/incidents/{id}/resolve`.
-
-## Stack
+Deploying (Vercel + Neon + an external scheduler): [docs/DEPLOY.md](docs/DEPLOY.md). Design notes:
+[docs/NIGHTWARDEN.md](docs/NIGHTWARDEN.md).
 
 FastAPI · SQLAlchemy 2 + Alembic · Postgres (Neon) or SQLite · Groq tool calling (`openai/gpt-oss-120b`) ·
-httpx · vanilla JS dashboard · pytest · Docker.
+Gemini backup · httpx · vanilla JS · pytest · Docker.
