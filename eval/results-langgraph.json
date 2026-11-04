@@ -1,5 +1,5 @@
 {
- "generated_at": "2026-11-03T13:34:29.242885+00:00",
+ "generated_at": "2026-11-04T00:52:44.095102+00:00",
  "model": "openai/gpt-oss-120b",
  "orchestrator": "langgraph",
  "cases": [
@@ -1043,7 +1043,23 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "suppress",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "watch",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 7358,
+   "latency_ms": 4050,
+   "summary": "One DB connection error observed; monitor for further failures before paging.",
+   "inconclusive": false
   },
   {
    "scenario": 10,
@@ -1052,7 +1068,22 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "suppress",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 5637,
+   "latency_ms": 25549,
+   "summary": "DB connection error caused 8% 5xx spike; notify on\u2011call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 11,
@@ -1070,7 +1101,23 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "notify",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 5,
+   "tool_calls": 4,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 7230,
+   "latency_ms": 42028,
+   "summary": "1 recent 5xx error (OperationalError) with high latency; notify on-call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 11,
@@ -1079,7 +1126,22 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "notify",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "page",
+   "confidence": "high",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_metrics",
+    "get_deploy_history",
+    "decide"
+   ],
+   "tokens": 5886,
+   "latency_ms": 36957,
+   "summary": "DB connection errors caused a 6% 5xx spike and high latency on citebase; page on\u2011call now.",
+   "inconclusive": false
   },
   {
    "scenario": 11,
@@ -1088,7 +1150,22 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "notify",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 5848,
+   "latency_ms": 18755,
+   "summary": "Error spike (7.7% 5xx) and DB connection error detected; alert on-call for investigation.",
+   "inconclusive": false
   },
   {
    "scenario": 11,
@@ -1097,7 +1174,22 @@
    "silent": false,
    "kind": "error_spike",
    "expected": "notify",
-   "baseline": "notify"
+   "baseline": "notify",
+   "orchestrator": "langgraph",
+   "agent": "watch",
+   "confidence": "medium",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "search_past_incidents",
+    "decide"
+   ],
+   "tokens": 5580,
+   "latency_ms": 16017,
+   "summary": "Single transient 500 error observed; monitor for recurrence.",
+   "inconclusive": false
   },
   {
    "scenario": 12,
@@ -1115,7 +1207,21 @@
    "silent": false,
    "kind": "routine_check",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "notify",
+   "confidence": "medium",
+   "rounds": 3,
+   "tool_calls": 2,
+   "tools": [
+    "get_recent_logs",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 3955,
+   "latency_ms": 16782,
+   "summary": "Latency spike (p95 2.5\u202fs, +35% vs median) without errors \u2013 notify ops for follow\u2011up.",
+   "inconclusive": false
   },
   {
    "scenario": 12,
@@ -1124,7 +1230,21 @@
    "silent": false,
    "kind": "routine_check",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "watch",
+   "confidence": "medium",
+   "rounds": 4,
+   "tool_calls": 2,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "decide"
+   ],
+   "tokens": 3823,
+   "latency_ms": 23958,
+   "summary": "Performance slowdown observed (high latency) but no errors; continue watching.",
+   "inconclusive": false
   },
   {
    "scenario": 12,
@@ -1133,7 +1253,22 @@
    "silent": false,
    "kind": "routine_check",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "suppress",
+   "confidence": "high",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 5663,
+   "latency_ms": 10649,
+   "summary": "Routine check shows no anomalies; no human action needed.",
+   "inconclusive": false
   },
   {
    "scenario": 12,
@@ -1142,7 +1277,22 @@
    "silent": false,
    "kind": "routine_check",
    "expected": "suppress",
-   "baseline": "suppress"
+   "baseline": "suppress",
+   "orchestrator": "langgraph",
+   "agent": "suppress",
+   "confidence": "high",
+   "rounds": 4,
+   "tool_calls": 3,
+   "tools": [
+    "get_recent_logs",
+    "get_deploy_history",
+    "get_metrics",
+    "decide"
+   ],
+   "tokens": 5626,
+   "latency_ms": 28690,
+   "summary": "Routine check shows no issue; suppress the alert.",
+   "inconclusive": false
   }
  ]
 }
