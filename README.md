@@ -60,8 +60,48 @@ rules, and 75% of the silent ones, where the rules caught none. Its weakness is 
 dismisses anything. On the 12 benign cases it chose *watch* 8 times and *notify* 4 times, never *suppress*, and it
 over-paged 4 of 16 notify-level problems.
 
-**LangGraph vs loop:** pending ([PR #8](https://github.com/Vegess/nightwarden/pull/8), 86/96 scored). A daily
-workflow scores the rest within Groq's free tier.
+### LangGraph vs loop
+
+The same agent under two orchestrators: a plain tool-calling loop and a LangGraph state machine. Same tools, prompt,
+`decide` schema, round limit and model (`openai/gpt-oss-120b`), scored on the same 48 held-out cases; the backup
+provider was never used ([PR #8](https://github.com/Vegess/nightwarden/pull/8); `eval/results-loop.json`,
+`eval/results-langgraph.json`; `python -m eval.compare`). Latency includes free-tier rate-limit waits.
+
+| Metric | Loop | LangGraph |
+|---|---|---|
+| Action accuracy | 43.8% (21/48) | **54.2%** (26/48) |
+| Page recall | 75.0% (15/20) | **85.0%** (17/20) |
+| Page precision | 71.4% (15/21) | **73.9%** (17/23) |
+| Silent-degradation recall | 33.3% (4/12) | **50.0%** (6/12) |
+| Avg tool calls / event | 3.4 | 3.6 |
+| Avg tokens / event | 6,307 | 6,753 |
+| Median decision time | 17.5 s | 22.1 s |
+
+| # | Scenario | Expected | Loop | LangGraph |
+|---|---|---|---|---|
+| 1 | invalid API key | page | 4/4 | 4/4 |
+| 2 | model decommissioned | page | 4/4 | 3/4 |
+| 3 | LLM timeout | notify | 2/4 | 2/4 |
+| 4 | vector store emptied *(silent)* | page | 3/4 | 3/4 |
+| 5 | migration missing | page | 4/4 | 4/4 |
+| 6 | wrong API base *(silent)* | notify | 1/4 | 0/4 |
+| 7 | silent fallback *(silent)* | page | 0/4 | 3/4 |
+| 8 | rate-limiter storm | notify | 1/4 | 3/4 |
+| 9 | clean traffic spike | suppress | 0/4 | 0/4 |
+| 10 | transient 500, once | suppress | 0/4 | 0/4 |
+| 11 | transient 500, repeating | notify | 1/4 | 2/4 |
+| 12 | normal traffic (control) | suppress | 1/4 | 2/4 |
+
+**Run-to-run variance.** The loop is the agent in the headline table above. On the same 48 cases with the same model
+it scored very differently in two runs:
+
+| Loop run | Accuracy | Page recall | Page precision | Silent recall | Avg tool calls | Avg tokens | Median time |
+|---|---|---|---|---|---|---|---|
+| 11–12 Oct 2026 (`eval/results.json`) | 60.4% (29/48) | 95.0% (19/20) | 82.6% (19/23) | 75.0% (9/12) | 3.4 | 6,409 | 14.4 s |
+| 23 Oct 2026 (`eval/results-loop.json`) | 43.8% (21/48) | 75.0% (15/20) | 71.4% (15/21) | 33.3% (4/12) | 3.4 | 6,307 | 17.5 s |
+
+Results vary by ~15 points between runs (16.7 here), and n = 4 per scenario is small. LangGraph's 10-point lead
+over the loop is within that spread: read it as "no worse", not as a win. Both earlier result sets are kept.
 
 The development run (variation 0, 12 cases) is in `eval/results-dev.json`; it led to one general change
 (`get_metrics` also returns the window's median). Labels and the baseline were not touched.
@@ -88,6 +128,9 @@ Citebase /metrics, /metrics/logs
   Each kind has a 30-minute cooldown. Free-tier idle restarts are recorded, not triaged.
 - **Agent.** The model investigates with four read-only tools and must end by calling `decide`. The prompt describes
   the costs of paging versus missing a failure; it contains no "signal X means action Y" rules.
+- **Two orchestrators.** `ORCHESTRATOR=loop` (the default) runs a plain tool-calling loop; `ORCHESTRATOR=langgraph`
+  runs the same steps as a LangGraph state machine (imported only when selected). Switch by setting the environment
+  variable (Vercel: Project → Settings → Environment Variables, then redeploy). Comparison under Results.
 - **Fail loud: Groq → Gemini → rules.** If Groq is rate-limited or down, the backup (Gemini, `gemini-flash-latest`)
   decides; if both fail, the rules decide and silent-failure signals always page. Anything not decided by Groq is
   marked *degraded*. Provider errors are shortened before they reach an alert.
@@ -123,6 +166,8 @@ alembic upgrade head
 uvicorn app.main:app --reload # dashboard on http://localhost:8000
 pytest -q                     # no network, no key needed
 python -m eval.report         # held-out tables from eval/results.json
+python -m eval.compare        # loop vs LangGraph from eval/results-{loop,langgraph}.json
+ORCHESTRATOR=langgraph uvicorn app.main:app   # run triage through LangGraph instead of the loop
 ```
 
 Deploying (Vercel + Neon + an external scheduler): [docs/DEPLOY.md](docs/DEPLOY.md). Design notes:
