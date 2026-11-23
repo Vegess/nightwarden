@@ -140,8 +140,9 @@ def test_incidents_stay_open_while_down_and_quiet_ones_resolve(db, monkeypatch):
 
 def _restart_setup(db, before_requests, before_errors=0):
     """Two polls up (uptime 1000 s), then a restart 10 min later. `before_*` is the traffic in the window
-    just before the restart."""
-    t = datetime(2026, 11, 2, 3, 0, tzinfo=timezone.utc)
+    just before the restart. Anchored to yesterday 03:00 UTC: /api/status only lists info events from the
+    last 7 days of real time, so a fixed date would make the timeline assertion expire."""
+    t = (datetime.now(timezone.utc) - timedelta(days=1)).replace(hour=3, minute=0, second=0, microsecond=0)
     _poll(db, raw(uptime_s=1000), t)
     _poll(db, raw(uptime_s=1600, requests_total=100 + before_requests,
                   requests_by_status={"200": 100 + before_requests - before_errors, "500": before_errors}),
