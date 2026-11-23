@@ -2,7 +2,10 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pct = (v, d = 1) => (v == null ? "—" : (v * 100).toFixed(d) + "%");
-const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+/* Live reduced-motion flag: flipping the OS setting takes effect without a reload. */
+const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
+let REDUCED = motionQuery.matches;
+motionQuery.addEventListener?.("change", () => { REDUCED = motionQuery.matches; });
 const ago = (iso) => {
   if (!iso) return "never";
   const s = (Date.now() - new Date(iso)) / 1000;
@@ -39,15 +42,67 @@ function animate(root) {
       if (prev !== to) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
       return;
     }
-    const t0 = performance.now(), ms = 650;
-    const step = (t) => {
-      const k = Math.min(1, (t - t0) / ms);
-      show(to * (1 - Math.pow(1 - k, 3)));
-      if (k < 1) requestAnimationFrame(step);
+    const run = () => {
+      if (REDUCED) return show(to);
+      const t0 = performance.now(), ms = 650;
+      const step = (t) => {
+        const k = Math.min(1, (t - t0) / ms);
+        show(to * (1 - Math.pow(1 - k, 3)));
+        if (k < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
     };
-    requestAnimationFrame(step);
+    if (!countIO) return run();
+    show(0);  // starts counting the first time it scrolls into view
+    countRuns.set(el, run);
+    countIO.observe(el);
   });
+  reveal(root);
 }
+
+/* ---------- scroll motion (IntersectionObserver) ----------
+   - cards rise in once, the first time they scroll into view; their bars, columns and sparklines grow in with them
+   - count-ups start when the number is on screen
+   - looping animations (radar sweep, pipeline flow) pause while off-screen
+   A 2-minute refresh re-renders the same page: elements already revealed there show at once, so nothing replays. */
+const HAS_IO = "IntersectionObserver" in window;
+const countRuns = new WeakMap();
+const countIO = HAS_IO ? new IntersectionObserver((entries) => {
+  for (const e of entries) if (e.isIntersecting) { countIO.unobserve(e.target); countRuns.get(e.target)?.(); countRuns.delete(e.target); }
+}) : null;
+const revealIO = HAS_IO ? new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    const el = e.target;
+    el.classList.add("in");
+    revealIO.unobserve(el);
+    setTimeout(() => el.classList.remove("rv", "in"), 1600);  // hand back to the card's own hover transitions
+  }
+}, { rootMargin: "0px 0px -6% 0px" }) : null;
+const loopIO = HAS_IO ? new IntersectionObserver((entries) => {
+  for (const e of entries) e.target.classList.toggle("offscreen", !e.isIntersecting);
+}) : null;
+const revealed = new Set();
+function reveal(root) {
+  const scope = (root.id || root.closest("main>section")?.id || "") + location.pathname + location.search;
+  let batch = 0;
+  root.querySelectorAll(".card:not(.skel), svg.chart").forEach((el, i) => {
+    if (el.parentElement.closest(".rv")) return;  // inside a card that already reveals
+    const key = scope + "|" + i;
+    if (REDUCED || !revealIO || revealed.has(key)) return;
+    revealed.add(key);
+    el.classList.add("rv");
+    el.style.setProperty("--d", (batch++ % 6) * 55 + "ms");
+    revealIO.observe(el);
+  });
+  if (loopIO) root.querySelectorAll(".sweep, svg.diagram").forEach((el) => loopIO.observe(el));
+}
+/* Every page renders by replacing a section's HTML, so watch main and reveal whatever a render adds. */
+const pendingReveal = new Set();
+new MutationObserver((records) => {
+  for (const r of records) { const sec = r.target.closest?.("main>section") || r.target; if (sec.matches?.("main>section")) pendingReveal.add(sec); }
+  queueMicrotask(() => { pendingReveal.forEach(reveal); pendingReveal.clear(); });
+}).observe($("main"), { childList: true, subtree: true });
 const count = (v, key, fmt = "int", dp) => (v == null ? "—"
   : `<span data-count="${v}" data-key="${esc(key)}" data-fmt="${fmt}"${dp != null ? ` data-dp="${dp}"` : ""}>${fmt === "pct" ? (v * 100).toFixed(dp ?? 1) + "%" : Number(v).toLocaleString()}</span>`);
 /* "x s ago" texts tick every second. */
@@ -81,6 +136,7 @@ const notEnough = (what) => emptyCard("Not enough history yet", what);
   size(); requestAnimationFrame(draw);
   addEventListener("resize", () => { size(); if (REDUCED) draw(0); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && !REDUCED) requestAnimationFrame(draw); });
+  motionQuery.addEventListener?.("change", () => (REDUCED ? draw(0) : requestAnimationFrame(draw)));
 })();
 
 /* ---------- tooltip ---------- */
@@ -377,7 +433,7 @@ function scenarioChart(rows) {
     const cx = L + gw * i + gw / 2;
     const bar = (v, x, color) => {
       const y = Y(v), h = Math.max(0, H - B - y);
-      return h ? `<path d="M${x} ${H - B} V${y + 4} q0 -4 4 -4 h${bw - 8} q4 0 4 4 V${H - B} Z" fill="${color}"/>` : "";
+      return h ? `<path class="col" style="--d:${i * 40}ms" d="M${x} ${H - B} V${y + 4} q0 -4 4 -4 h${bw - 8} q4 0 4 4 V${H - B} Z" fill="${color}"/>` : "";
     };
     g += `<rect class="hit" data-i="${i}" x="${L + gw * i}" y="${T}" width="${gw}" height="${H - T - B}"/>
       <rect class="hl" x="${L + gw * i + 2}" y="${T}" width="${gw - 4}" height="${H - T - B}" rx="6"/>
@@ -742,7 +798,15 @@ const PAGES = {
   about: { render: renderAbout, nav: "about", title: "About · Nightwarden" },
 };
 const ALIASES = { "": "live", how: "about" };  // old URLs keep working
-function route() {
+/* Page changes run inside document.startViewTransition so the browser cross-fades old and new pages.
+   Without the API, or with reduced motion, the switch is immediate (plus the CSS .enter fade where motion is allowed). */
+function transition(update, samePage) {
+  if (samePage || REDUCED || typeof document.startViewTransition !== "function") return update(false);
+  document.startViewTransition(() => update(true));
+}
+let shownPath = location.pathname;
+function route(viaTransition = false) {
+  shownPath = location.pathname;
   if (location.hash.length > 1 && !document.getElementById(location.hash.slice(1))) {  // old #tab/id links keep working
     const h = location.hash.slice(1);
     history.replaceState(null, "", h === "live" ? "/" : "/" + h);
@@ -755,7 +819,7 @@ function route() {
   });
   document.querySelectorAll("main>section").forEach((s) => {
     const show = s.id === name;
-    if (show && s.hidden) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
+    if (show && s.hidden && !viaTransition && !REDUCED) { s.classList.remove("enter"); void s.offsetWidth; s.classList.add("enter"); }
     s.hidden = !show;
   });
   $(".top").classList.remove("open");
@@ -767,8 +831,7 @@ function route() {
 }
 function go(path) {
   if (path !== location.pathname + location.search) history.pushState(null, "", path);
-  route();
-  scrollTo(0, 0);
+  transition((vt) => { route(vt); scrollTo(0, 0); }, location.pathname === shownPath);
 }
 $("#menu").onclick = () => {
   const open = $(".top").classList.toggle("open");
@@ -782,7 +845,7 @@ document.addEventListener("click", (e) => {
   e.preventDefault();
   go(u.pathname + u.search);
 });
-addEventListener("popstate", route);
+addEventListener("popstate", () => transition(route, location.pathname === shownPath));
 route();
 /* Refresh every 2 minutes, only while the tab is visible: every refresh is a database read. */
 const REFRESH_MS = 120000;

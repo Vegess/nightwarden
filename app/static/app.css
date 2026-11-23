@@ -311,8 +311,30 @@ main > section.enter { animation: enter .28s ease-out; }
   .hub { grid-template-columns: 1fr; }
 }
 
+/* scroll reveal (IntersectionObserver adds .in once): cards rise, their bars and sparklines grow in */
+.rv { opacity: 0; transform: translateY(12px); transition: opacity .55s cubic-bezier(.22, 1, .36, 1) var(--d, 0ms), transform .55s cubic-bezier(.22, 1, .36, 1) var(--d, 0ms); }
+.rv.in { opacity: 1; transform: none; }
+.rv .track .bar span, .rv .hb-fill { transform: scaleX(0); transform-origin: left; transition: transform .7s cubic-bezier(.22, 1, .36, 1) calc(var(--d, 0ms) + .15s); }
+.rv.in .track .bar span, .rv.in .hb-fill { transform: none; }
+.rv .chart .col, svg.chart.rv .col { transform: scaleY(0); transform-box: fill-box; transform-origin: bottom; transition: transform .6s cubic-bezier(.22, 1, .36, 1) calc(var(--d, 0ms) + .1s); }
+.rv.in .chart .col, svg.chart.rv.in .col { transform: none; }
+.rv .spark .line, .rv .spark .area { clip-path: inset(0 100% 0 0); transition: clip-path 1s cubic-bezier(.22, 1, .36, 1) calc(var(--d, 0ms) + .15s); }
+.rv.in .spark .line, .rv.in .spark .area { clip-path: inset(0 0 0 0); }
+/* looping animations pause while off-screen */
+.sweep.offscreen, svg.diagram.offscreen .flow { animation-play-state: paused; }
+
+/* page changes (document.startViewTransition): the header stays put, the page cross-fades */
+.top { view-transition-name: top; }
+::view-transition-old(root) { animation: .14s ease-in both vt-out; }
+::view-transition-new(root) { animation: .26s cubic-bezier(.22, 1, .36, 1) both vt-in; }
+@keyframes vt-out { to { opacity: 0; } }
+@keyframes vt-in { from { opacity: 0; transform: translateY(6px); } }
+
 @media (prefers-reduced-motion: reduce) {
   .sweep, .diagram .flow, main > section.enter, .skel::after, .skel-line::after, .pulse { animation: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  .rv, .rv .track .bar span, .rv .hb-fill, .rv .chart .col, svg.chart.rv .col, .rv .spark .line, .rv .spark .area {
+    opacity: 1; transform: none; clip-path: none; transition: none; }
   .clickable, .clickable .arrow, .menu-btn span { transition: none; }
   .clickable:hover { transform: none; }
 }
