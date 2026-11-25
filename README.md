@@ -135,12 +135,14 @@ Citebase /metrics, /metrics/logs
   decides; if both fail, the rules decide and silent-failure signals always page. Anything not decided by Groq is
   marked *degraded*. Provider errors are shortened before they reach an alert.
 - **Self-checks.** `/health` runs checks on itself (poll freshness, target reachable, Groq usable, backup provider
-  tested twice a day, alerts configured, migrations at head, Groq tokens today, Neon transfer month to date).
+  tested twice a day, alerts configured, migrations at head, Groq tokens today, Neon transfer and compute hours month to date, with a projected
+  run-out date).
   `/usage` shows the free-tier budgets. `/insights` gathers performance (paths, speed, agreement with a shadow
   rules decision recorded next to every live one), weekly/monthly/yearly reports, health, usage and the eval.
 - **Cost controls.** Polls every 10 minutes; one `poller_state` row read per poll instead of past snapshots; stored
-  readings keep only the keys something reads; column selects; public reads edge-cached (`s-maxage=60`); Neon's
-  API read at most hourly; the eval capped at 120K Groq tokens per run.
+  readings keep only the keys something reads; column selects; public API reads edge-cached (`s-maxage=300`, `stale-while-revalidate=600`);
+  no connection pool on Postgres (each poll opens and closes its connection, so Neon can suspend); Neon's API read
+  at most hourly; the eval capped at 120K Groq tokens per run.
   **Measured Neon egress** (`python -m scripts.measure_egress`, 24 h of 10-minute polls, values only):
 
   | | before | after |
@@ -154,7 +156,8 @@ Citebase /metrics, /metrics/logs
   real logs but aren't real incidents.
 - The agent over-escalates benign signals (never chose *suppress* on held-out cases).
 - One LLM call per event; next step is grouping alerts before triage.
-- Free tiers set the pace: 10-minute polls, Groq's daily token cap, Neon's 5 GB transfer.
+- Free tiers set the pace: 10-minute polls, Groq's daily token cap, Neon's 5 GB transfer and 100 CU-hours a month
+  (a 10-minute poll keeps Neon awake about half the time; the fallback is a 15-minute poll, see docs/DEPLOY.md).
 
 ## Run it
 

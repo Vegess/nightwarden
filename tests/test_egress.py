@@ -80,12 +80,14 @@ def test_state_is_seeded_once_from_existing_snapshots(db):
 def test_cache_headers(db, monkeypatch):
     c = client(db, monkeypatch)
     shared = "public, s-maxage=60, stale-while-revalidate=300"
+    api = "public, s-maxage=300, stale-while-revalidate=600"
     for path in ("/api/status", "/api/stats", "/api/decisions", "/api/incidents", "/api/health/checks", "/api/eval",
-                 "/", "/live", "/usage", "/robots.txt"):
+                 "/api/performance", "/api/reports", "/api/usage"):
+        assert c.get(path).headers["cache-control"] == api, path
+    for path in ("/", "/live", "/usage", "/robots.txt"):
         assert c.get(path).headers["cache-control"] == shared, path
     assert c.get("/health", headers={"Accept": "text/html"}).headers["cache-control"] == shared
     assert "s-maxage" not in c.get("/health").headers.get("cache-control", "")  # uptime monitors: always fresh
-    assert c.get("/api/usage").headers["cache-control"] == "public, s-maxage=300, stale-while-revalidate=300"
     admin = {"Authorization": "Bearer secret"}
     assert c.get("/api/decisions", headers=admin).headers["cache-control"] == "no-store"
     assert c.get("/api/status", headers={"Authorization": "Bearer wrong"}).headers["cache-control"] == "no-store"
@@ -113,13 +115,20 @@ def test_brief_decisions_count_tools_in_the_database(db, monkeypatch):
     assert d["event"] == {"kind": "error_spike", "detail": "x"} and d["decided_by"] == "groq"
 
 
-def _neon(monkeypatch, transfer_bytes, calls):
+def _neon(monkeypatch, transfer_bytes, calls, cu_seconds=None):
     from app.routes import ops
     monkeypatch.setattr(ops.settings, "neon_api_key", "k")
     monkeypatch.setattr(ops.settings, "neon_project_id", "p")
 
     def get(url, **kw):
         calls.append(url)
+        if "consumption_history" in url:
+            if cu_seconds is None:
+                return httpx.Response(403, request=httpx.Request("GET", url), json={"message": "plan"})
+            day = {"timeframe_start": "2026-11-01T00:00:00Z",
+                   "metrics": [{"metric_name": "compute_unit_seconds", "value": cu_seconds / 2}]}
+            return httpx.Response(200, request=httpx.Request("GET", url), json={"projects": [{
+                "project_id": "p", "periods": [{"consumption": [day, day]}]}]})
         return httpx.Response(200, request=httpx.Request("GET", url), json={"project": {
             "data_transfer_bytes": transfer_bytes, "compute_time_seconds": 7200,
             "consumption_period_start": "2026-10-01T00:00:00Z"}})
@@ -135,7 +144,7 @@ def test_neon_transfer_on_health_and_usage(db, monkeypatch, gb, status):
     assert check["status"] == status and f"{gb:.2f} of 5 GB" in check["detail"]
     t = c.get("/api/usage").json()["neon"]["transfer"]
     assert t["limit_gb"] == 5.0 and t["gb"] == pytest.approx(gb)
-    assert len(calls) == 1  # both pages share one Neon API call an hour
+    assert len(calls) == 2  # both pages share one project + one consumption call an hour
 
 
 def test_neon_api_is_cached_for_an_hour(monkeypatch):
@@ -147,10 +156,10 @@ def test_neon_api_is_cached_for_an_hour(monkeypatch):
     ops.neon_usage()
     clock[0] += 3599
     ops.neon_usage()
-    assert len(calls) == 1
+    assert len(calls) == 2
     clock[0] += 2
     ops.neon_usage()
-    assert len(calls) == 2
+    assert len(calls) == 4
 
 
 def test_neon_not_configured_is_a_warning(db, monkeypatch):
@@ -159,3 +168,41 @@ def test_neon_not_configured_is_a_warning(db, monkeypatch):
     checks = client(db, monkeypatch).get("/api/health/checks").json()["checks"]
     neon = next(x for x in checks if x["name"] == "Neon network transfer")
     assert neon["status"] == "warn" and "not configured" in neon["detail"]
+
+
+NOW = datetime(2026, 11, 25, 12, tzinfo=timezone.utc)  # 24.5 days into November
+
+
+@pytest.mark.parametrize("cu_h,status", [(50, "pass"), (75, "warn"), (92, "fail")])
+def test_neon_compute_hours_from_consumption_api(db, monkeypatch, cu_h, status):
+    from app.routes import ops
+    calls = []
+    _neon(monkeypatch, 10, calls, cu_seconds=cu_h * 3600)
+    check = next(x for x in ops.build_checks(db, "x", NOW)["checks"] if x["name"] == "Neon compute hours")
+    assert check["status"] == status and f"{cu_h:.1f} of 100 CU-h" in check["detail"]
+    k = ops.neon_usage(db, NOW)["compute"]
+    assert k["cu_hours"] == cu_h and k["source"].startswith("consumption API")
+    # 24.5 days in: 50 and 75 CU-h last the month at that rate; 92 (~3.75/day, 8 left) runs out on the 27th
+    expected = {50: None, 75: None, 92: "2026-11-27"}[cu_h]
+    assert k["projected_run_out"] == expected
+    assert ("runs out around 2026-11-27" if expected else "lasts the month") in check["detail"]
+
+
+def test_neon_compute_falls_back_to_project_counter(db, monkeypatch):
+    from app.routes import ops
+    _neon(monkeypatch, 10, [])  # consumption API refuses (403): use compute_time_seconds = 2 h
+    k = ops.neon_usage(db, NOW)["compute"]
+    assert k["cu_hours"] == 2.0 and k["source"].startswith("project counter")
+    check = next(x for x in ops.build_checks(db, "x", NOW)["checks"] if x["name"] == "Neon compute hours")
+    assert check["status"] == "pass"
+
+
+def test_postgres_engine_uses_nullpool():
+    """No idle pooled connection on Postgres: each poll's session opens and closes its own connection."""
+    import os
+    import subprocess
+    import sys
+    code = "from app.db.session import engine; print(type(engine.pool).__name__)"
+    env = {**os.environ, "DATABASE_URL": "postgresql://u:p@localhost:1/db"}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "NullPool"

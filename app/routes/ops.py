@@ -1,7 +1,8 @@
 """Self-checks and free-tier usage for the /health and /usage pages.
 
 Both read only what Nightwarden already stores (no extra polling of the
-target, no Groq calls) and are cached: checks 60 s, usage 5 min, Neon's API 1 h.
+target, no Groq calls) and are cached: checks 60 s, usage 5 min, Neon's API 1 h
+(project endpoint for transfer, consumption endpoint for compute hours; same key).
 """
 import math
 import os
@@ -156,12 +157,20 @@ def build_checks(db: Session, request_host: str | None, now: datetime | None = N
     neon = neon_usage(db, now)
     if not neon["configured"]:
         out.append(_check("Neon network transfer", "warn", neon["detail"]))
+        out.append(_check("Neon compute hours", "warn", neon["detail"]))
     elif neon.get("error"):
         out.append(_check("Neon network transfer", "warn", neon["error"]))
+        out.append(_check("Neon compute hours", "warn", neon["error"]))
     else:
         t = neon["transfer"]
         out.append(_check("Neon network transfer", transfer_status(t["share"]),
                           f"{t['gb']:.2f} of {t['limit_gb']:g} GB this month ({t['share']:.0%}); warn at 70 %, fail at 90 %"))
+        k = neon["compute"]
+        runs_out = (f"runs out around {k['projected_run_out']} at the current rate" if k["projected_run_out"]
+                    else "lasts the month at the current rate")
+        out.append(_check("Neon compute hours", compute_status(k["share"]),
+                          f"{k['cu_hours']:.1f} of {k['limit']:g} CU-h ({k['share']:.0%}); {runs_out}; "
+                          "warn at 70 %, fail at 90 % (fallback: poll every 15 min)"))
 
     overall = max((c["status"] for c in out), key=RANK.__getitem__)
     return {"overall": overall, "checked_at": now.isoformat(), "checks": out}
@@ -203,6 +212,60 @@ def _neon_fetch() -> dict:
                 "limit": settings.neon_cu_hours_limit}
     return {"configured": True, "cu_hours": cu_hours, "limit": settings.neon_cu_hours_limit,
             "period_start": p.get("consumption_period_start"), "transfer_bytes": transfer}
+
+
+NEON_CONSUMPTION = "https://console.neon.tech/api/v2/consumption_history/v2/projects"
+
+
+def _metric_sum(node, name: str) -> float | None:
+    """Sum every `{"metric_name": name, "value": v}` (and any plain `name: v` field) in a consumption reply."""
+    total, seen = 0.0, False
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, dict):
+            if n.get("metric_name") == name and isinstance(n.get("value"), (int, float)):
+                total, seen = total + n["value"], True
+            elif isinstance(n.get(name), (int, float)):
+                total, seen = total + n[name], True
+            stack.extend(v for v in n.values() if isinstance(v, (dict, list)))
+        elif isinstance(n, list):
+            stack.extend(n)
+    return total if seen else None
+
+
+def _neon_compute_seconds(month_start: datetime, now: datetime) -> float | None:
+    """CU-seconds since the 1st from Neon's consumption API (same key); None if the plan or API refuses."""
+    try:
+        r = httpx.get(NEON_CONSUMPTION, timeout=10, params={
+            "project_ids": settings.neon_project_id, "granularity": "daily", "metrics": "compute_unit_seconds",
+            "from": month_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "to": (_day_start(now) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
+            headers={"Authorization": f"Bearer {settings.neon_api_key}", "Accept": "application/json"})
+        r.raise_for_status()
+        return _metric_sum(r.json(), "compute_unit_seconds")
+    except Exception:  # noqa: BLE001 — fall back to the project's own counter
+        return None
+
+
+def compute_status(share: float) -> str:
+    return "fail" if share >= 0.9 else "warn" if share >= 0.7 else "pass"
+
+
+def compute_usage(cu_hours: float, limit: float, since: datetime, now: datetime, source: str) -> dict:
+    """CU-hours used vs the monthly allowance, and when it runs out at the rate so far (None: not this month)."""
+    share = cu_hours / limit if limit else 1.0
+    elapsed_h = (now - since).total_seconds() / 3600
+    month_end = (_day_start(now).replace(day=1) + timedelta(days=32)).replace(day=1)
+    run_out = None
+    if cu_hours >= limit:
+        run_out = now
+    elif cu_hours > 0 and elapsed_h > 0:
+        at = now + timedelta(hours=(limit - cu_hours) / (cu_hours / elapsed_h))
+        run_out = at if at < month_end else None
+    return {"cu_hours": round(cu_hours, 2), "limit": limit, "share": round(share, 4), "since": since.isoformat(),
+            "source": source, "per_day": round(cu_hours / elapsed_h * 24, 2) if elapsed_h > 0 else None,
+            "projected_run_out": run_out.date().isoformat() if run_out else None}
 
 
 def _parse_ts(value) -> datetime | None:
@@ -255,7 +318,14 @@ def _neon_build(db: Session | None, now: datetime | None) -> dict:
         return {**raw, "error": f"could not read Neon usage (month-to-date base: {type(exc).__name__})"}
     limit_gb = settings.neon_transfer_limit_gb
     gb = mtd / 1e9
-    return {**raw, "month_start": _day_start(now).replace(day=1).isoformat(),
+    month_start = _day_start(now).replace(day=1)
+    seconds = _neon_compute_seconds(month_start, now)
+    if seconds is not None:
+        compute = compute_usage(seconds / 3600, raw["limit"], month_start, now, "consumption API, month to date")
+    else:  # the project's counter covers Neon's own consumption period
+        since = _parse_ts(raw.get("period_start")) or month_start
+        compute = compute_usage(raw["cu_hours"], raw["limit"], min(since, now), now, "project counter, billing period")
+    return {**raw, "month_start": month_start.isoformat(), "compute": compute,
             "transfer": {"gb": round(gb, 3), "limit_gb": limit_gb, "share": round(gb / limit_gb, 4) if limit_gb else 1.0}}
 
 

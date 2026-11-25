@@ -220,7 +220,7 @@ def test_new_pages_and_old_urls_are_served_and_cached(db, monkeypatch):
         assert r.status_code == 200 and 'id="topnav"' in r.text, path
         assert r.headers["cache-control"] == "public, s-maxage=60, stale-while-revalidate=300", path
     for path in ("/api/performance", "/api/reports"):
-        assert c.get(path).headers["cache-control"].startswith("public, s-maxage=60"), path
+        assert c.get(path).headers["cache-control"] == "public, s-maxage=300, stale-while-revalidate=600", path
 
 
 def test_top_bar_has_four_entries_and_every_page_has_a_section():
