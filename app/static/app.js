@@ -588,7 +588,10 @@ async function renderUsage() {
     : n.error ? emptyCard("Couldn't read Neon usage", esc(n.error))
     : `<div class="card">
         ${n.transfer ? meter("Network transfer · this month", n.transfer.gb, n.transfer.limit_gb, { unit: " GB", warnAt: 0.7, failAt: 0.9, sub: "warn at 70 %, fail at 90 %" }) : ""}
-        ${meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
+        ${n.compute ? meter("Compute hours · this month", n.compute.cu_hours, n.compute.limit, { unit: " CU-h", warnAt: 0.7, failAt: 0.9,
+            sub: `since ${when(n.compute.since)} · ${esc(n.compute.source)} · warn at 70 %, fail at 90 % · `
+              + (n.compute.projected_run_out ? `<b>runs out around ${day(n.compute.projected_run_out + "T12:00:00Z")}</b> at ${num(n.compute.per_day)} CU-h/day` : "lasts the month at the current rate") })
+          : meter("Compute hours · billing period", n.cu_hours, n.limit, { unit: " CU-h", sub: n.period_start ? `since ${when(n.period_start)}` : "" })}</div>`;
   const tracking = m.tracking_since ? `tracking since ${day(m.tracking_since)}` : "tracking since the first alert email (none recorded yet)";
   el.innerHTML = `${head}
     <h1>Usage</h1>

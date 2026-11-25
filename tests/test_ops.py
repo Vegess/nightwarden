@@ -206,6 +206,8 @@ def _neon_reply(monkeypatch, replies):
     monkeypatch.setattr(ops.settings, "neon_project_id", "p")
 
     def get(url, **kw):
+        if "consumption_history" in url:  # compute hours fall back to the project counter
+            return httpx.Response(403, request=httpx.Request("GET", url))
         r = replies.pop(0)
         return r if isinstance(r, httpx.Response) else httpx.Response(200, request=httpx.Request("GET", url), json={
             "project": {"data_transfer_bytes": r[0], "compute_time_seconds": 0, "consumption_period_start": r[1]}})

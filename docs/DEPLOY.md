@@ -8,6 +8,23 @@ scheduler calls `/api/cron/poll`. Every 10 minutes keeps Citebase's free Render 
 idle minutes), and leaves both Neon databases idle often enough to stay inside the free 100 compute-hours a month
 (Neon sleeps after 5 idle minutes).
 
+**Compute-hour budget.** Neon's free plan allows **100 CU-hours a month**. A 10-minute poll keeps the compute
+awake roughly half the time (each poll wakes it, then it idles 5 minutes before suspending), which runs close to
+the limit; one project reached 80 % before month end. What keeps it down:
+
+- each poll opens one connection and closes it when it finishes (`NullPool` on Postgres; no idle pooled
+  connection holds the compute awake);
+- public API reads are edge-cached for 5 minutes (`s-maxage=300, stale-while-revalidate=600`), so dashboard
+  viewers almost never wake the database;
+- `/health` has a **Neon compute hours** check (warn at 70 %, fail at 90 %, with a projected run-out date) and
+  `/usage` shows CU-hours used against 100. Both need `NEON_API_KEY` and `NEON_PROJECT_ID` (add them to the Vercel environment variables in section 2; same key as the transfer check).
+
+**Fallback when usage runs high:** change the cron-job.org schedule (section 3) to **every 15 minutes**
+(`*/15`). Neon then suspends between most polls, roughly halving compute hours. The cost: Citebase's Render
+service may sleep between polls (one cold start per poll) and an outage takes up to ~45 minutes to page.
+Poll freshness on `/health` still passes under 15 minutes and warns under 30, so a 15-minute schedule shows as
+an occasional warn, not a failure.
+
 ## 1. Database (Neon)
 
 1. console.neon.tech → **New Project** → name `nightwarden`, region **AWS US East 1 (N. Virginia)** (next to
@@ -42,7 +59,7 @@ idle minutes), and leaves both Neon databases idle often enough to stay inside t
 
 1. cron-job.org → sign up (free) → **Create cronjob**.
 2. URL `https://<project>.vercel.app/api/cron/poll`, schedule **every 10 minutes** (custom: minutes
-   `*/10`).
+   `*/10`). If the Neon compute-hours check warns, switch to every 15 minutes (`*/15`); see the budget note at the top.
 3. **Advanced** → Request method `POST`, add header `Authorization` = `Bearer <CRON_SECRET>`. cron-job.org
    waits 30 s. A normal poll takes a few seconds; one that triages an event can take longer and shows as a
    timeout there. That's fine: the poll is already saved, and if a triage is cut off it runs on the next
